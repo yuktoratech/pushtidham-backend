@@ -68,6 +68,14 @@ export const statusBody = z
     adminNote: z.string().max(2000).optional(),
   })
   .strict();
+export const financialReportQuery = z.object({
+  from: z.iso.datetime({ offset: true }).optional(),
+  to: z.iso.datetime({ offset: true }).optional(),
+  provider: z.enum(["stripe","paypal","offline","legacy_paypal","legacy_bank_transfer"]).optional(),
+  paymentMethod: z.enum(paymentMethods).optional(),
+  type: z.enum(donationTypes).optional(),
+}).strict().refine((v)=>!v.from||!v.to||new Date(v.from)<=new Date(v.to),{path:["to"],message:"Invalid date range"});
 export type DonationInput =
   z.infer<typeof onlineBody> | z.infer<typeof offlineBody>;
 export type DonationQuery = z.infer<typeof donationQuery>;
+export type FinancialReportQuery = z.infer<typeof financialReportQuery>;

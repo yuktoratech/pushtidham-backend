@@ -1,48 +1,24 @@
 import { randomBytes } from "node:crypto";
 import { Types } from "mongoose";
 import { Donation } from "../models/donation.js";
-import { Giving } from "../models/giving.js";
-import { Event } from "../models/event.js";
-import { User } from "../models/user.js";
 import type { DonationInput, DonationQuery } from "../validators/donation.js";
 import { AppError, missing } from "../utils/errors.js";
 import { paginate, escapeRegex } from "../utils/pagination.js";
+import {
+  requireActiveDonationUser,
+  resolveDonationDesignation,
+} from "./donation-eligibility.js";
+import { donationViews } from "./donation-views.js";
 export class DonationService {
   async create(input: DonationInput, actor?: Types.ObjectId, offline = false) {
-    let title: string;
-    if (input.type === "general") {
-      const giving = await Giving.findOne({
-        _id: input.giving,
-        deletedAt: null,
-        status: "active",
-      });
-      if (!giving) missing("Active Giving");
-      if (
-        giving.amountType === "fixed" &&
-        !giving.fixedAmountsCents.includes(input.amountCents)
-      )
-        throw new AppError(
-          400,
-          "INVALID_AMOUNT",
-          "Amount must match a configured fixed amount",
-        );
-      title = giving.title;
-    } else {
-      const event = await Event.findOne({
-        _id: input.event,
-        ...(offline ? {} : { deletedAt: null, status: "published" }),
-      });
-      if (!event) missing(offline ? "Event" : "Published Event");
-      title = event.title;
-    }
+    const { title } = await resolveDonationDesignation(input, offline);
     const user =
       offline && "user" in input && input.user
         ? new Types.ObjectId(input.user)
         : offline
           ? undefined
           : actor;
-    if (user && !(await User.exists({ _id: user, status: "active" })))
-      missing("Active user");
+    await requireActiveDonationUser(user);
     const status = offline && "status" in input ? input.status : "pending";
     const now = new Date();
     const base = {
@@ -105,7 +81,7 @@ export class DonationService {
       "Please retry donation creation",
     );
   }
-  async list(query: DonationQuery, user?: Types.ObjectId) {
+  async list(query: DonationQuery, user?: Types.ObjectId, admin = false) {
     const filter: Record<string, unknown> = {};
     if (user) filter.user = user;
     for (const key of [
@@ -131,10 +107,7 @@ export class DonationService {
       ];
     }
     const result = await paginate(Donation, filter, query);
-    return {
-      ...result,
-      data: user ? result.data.map((d) => this.donorView(d)) : result.data,
-    };
+    return { ...result, data: await donationViews(result.data as unknown as Array<Record<string,unknown> & {_id:Types.ObjectId}>, admin) };
   }
   donorView(doc: Record<string, unknown>) {
     const {
@@ -178,13 +151,13 @@ export class DonationService {
       rejectedAt,
     };
   }
-  async get(id: string, user?: Types.ObjectId) {
+  async get(id: string, user?: Types.ObjectId, admin = false) {
     const doc = await Donation.findOne({
       _id: id,
       ...(user ? { user } : {}),
     }).lean();
     if (!doc) missing("Donation");
-    return user ? this.donorView(doc) : doc;
+    return (await donationViews([doc as unknown as Record<string,unknown> & {_id:Types.ObjectId}],admin))[0];
   }
   async status(
     id: string,

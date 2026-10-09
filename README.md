@@ -1,6 +1,6 @@
 # Pushtidham backend
 
-Separate Phase 1 REST backend for the approved donation frontend. No frontend files are managed here. PayPal processing, bank verification workflows, email, PDF receipts, password-reset email, deployment and frontend integration remain future work.
+REST backend for the approved donation frontend. Phase 4C adds PayPal Orders v2 creation/capture, verified PayPal webhooks and bounded reconciliation while preserving Stripe Checkout and legacy donation methods. Full checkout UI, recurring billing, refund initiation, receipts, email and admin reporting remain future work.
 
 ## Stack and architecture
 
@@ -17,6 +17,8 @@ Node 22.19+ (Node 22 LTS tested), Express 5, TypeScript, MongoDB/Mongoose, Zod, 
 5. Run `npm run db:indexes` explicitly before production traffic. It creates declared indexes without dropping indexes; investigate duplicate data if unique-index creation fails. Production does not automatically build indexes.
 6. Run `npm run dev`. Check `GET http://localhost:4000/api/v1/health`.
 
+Payment invariants are documented in `docs/payment-foundation.md`; provider operations are in `docs/stripe-phase-4b.md` and `docs/paypal-phase-4c.md`. Payment event application requires a MongoDB replica set because verified outcomes span the attempt, donation, webhook ledger and adjustment ledger in a transaction.
+
 Required settings: NODE_ENV, PORT, MONGODB_URI, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, JWT_ACCESS_EXPIRES_IN (60s–30m), JWT_REFRESH_EXPIRES_IN (1h–30d), FRONTEND_URL. Optional COOKIE_SAME_SITE (lax/strict/none), TRUST_PROXY_HOPS (0 by default; configure only for your actual trusted reverse proxy), ADMIN_SEED_NAME/EMAIL/PASSWORD. Production frontend origin requires HTTPS. Cross-site frontend/backend origins require production HTTPS plus COOKIE_SAME_SITE=none; same-site subdomains can use lax. Cookies are host-only, HttpOnly and Secure in production, scoped to /api/v1/auth.
 
 ## Commands
@@ -27,6 +29,7 @@ Required settings: NODE_ENV, PORT, MONGODB_URI, JWT_ACCESS_SECRET, JWT_REFRESH_S
 - `npm test`: run after building; tests also start dist/server.js. Uses mongodb-memory-server with an independent ephemeral MongoDB process and randomly generated test secrets. It never reads your configured database URI or wipes external databases. First run downloads a MongoDB binary and requires network access; cache/download artifacts stay ignored/outside Git. Tests stop their own database/process on completion.
 - `npm run seed`: explicit admin seed using environment credentials. Password must be 12+ characters and at most 72 UTF-8 bytes. Existing admin password/status are preserved. A donor email cannot be silently promoted. Development adds missing example Giving/Event records using set-on-insert; production seeds only the admin. Never wipes data.
 - `npm run db:indexes`: explicit non-destructive index creation.
+- `npm run payments:reconcile:stripe`: reconcile a bounded batch of stale Stripe attempts from authoritative Stripe objects. Schedule this command externally; it never creates or retries a charge.
 
 ## API contract
 
@@ -42,6 +45,9 @@ All paths start with /api/v1. JSON success: {success:true,data:...}; lists also 
 | Public                          | GET /giving, /giving/:slug                               | Active, non-deleted Giving                           |
 | Public                          | GET /events, /events/:slug                               | Published, non-deleted Events                        |
 | Optional Bearer                 | POST /donations                                          | Create pending online donation intent; guest allowed |
+| Optional Bearer                 | POST /payments/stripe/checkout-sessions                  | Create hosted Stripe Checkout; Idempotency-Key required |
+| Owner or guest status token     | GET /payments/attempts/:id/status                        | PII-minimized payment status                         |
+| Stripe signature               | POST /webhooks/stripe                                    | Raw-body verified Stripe events                      |
 | Bearer                          | GET /donations, /donations/:id                           | Own donations by user ID, never email                |
 | Admin                           | GET/POST /admin/giving, /admin/events                    | List/create                                          |
 | Admin                           | GET/PUT/DELETE /admin/giving/:id, /admin/events/:id      | Read/replace/safe soft-delete                        |
@@ -53,6 +59,8 @@ All paths start with /api/v1. JSON success: {success:true,data:...}; lists also 
 Giving body: {title,slug,description?,amountType,fixedAmountsCents?,status?,displayOrder?}. Modes: fixed, custom, fixed_and_custom. Slugs normalize lowercase and use hyphen-separated alphanumerics. Amounts deduplicate/sort; custom mode clears fixed amounts. Event body: {title,slug,shortDescription?,description?,startsAt,endsAt?,location,image?,status?}. UTC/offset-aware ISO dates required, end cannot precede start. Image is HTTP(S) URL or local asset path; text descriptions are plain content, and future clients must safely render/escape them.
 
 Online donation body: {donorName,donorEmail,donorPhone?,type,giving?,event?,amountCents,currency?:'USD',paymentMethod:'paypal'|'bank_transfer',bankReference?}. General requires only giving; Event requires only event. Titles/configuration are fetched server-side, and status/source/admin identity cannot be submitted. An authenticated donation is linked to the authenticated user regardless of contact email. Guests have no donor-history access and cannot later claim history merely by matching email. POST creates an intent only: it does not charge, verify, complete a payment, or return a PayPal checkout URL. Implement idempotency/provider reconciliation before connecting payment processing.
+
+Stripe Checkout accepts the same donor/designation fields plus `methodFamily:'card'|'ach'` and `coverFees:boolean`; it does not accept `paymentMethod`, payment totals, or completion state. See `docs/stripe-phase-4b.md` for exact request/response and status-token contracts. A browser redirect is never proof of payment.
 
 Offline body uses the same contact/type/reference/amount fields plus optional {user,status,offlineReference,adminNote}; paymentMethod/source are server-set offline. User linking is explicit/admin-only and must reference an active user. Status defaults pending; admin can record completed/rejected offline entries. verifiedBy/timestamps are server-set. Final statuses cannot be reversed in Phase 1. Online completion is blocked even for admins until provider/bank verification is implemented. Donor DTOs omit admin notes, verification identity and internal payment references.
 

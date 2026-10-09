@@ -21,6 +21,7 @@ export function donationController(service: DonationService, admin = false) {
           ...(await service.list(
             req.validated.query as DonationQuery,
             admin ? undefined : req.principal!.id,
+            admin,
           )),
         }),
       get: async (req, res) =>
@@ -33,6 +34,7 @@ export function donationController(service: DonationService, admin = false) {
               }
             ).id,
             admin ? undefined : req.principal!.id,
+            admin,
           ),
         }),
       status: async (req, res) =>

@@ -25,6 +25,19 @@ const schema = new Schema(
       validate: Number.isInteger,
     },
     currency: { type: String, enum: ["USD"], default: "USD" },
+    feeContributionCents: { type: Number, min: 0, validate: Number.isInteger },
+    totalChargedCents: {
+      type: Number,
+      min: MIN_DONATION_CENTS,
+      max: MAX_DONATION_CENTS,
+      validate: Number.isInteger,
+    },
+    actualProviderFeeCents: { type: Number, min: 0, validate: Number.isInteger },
+    netProceedsCents: { type: Number, validate: Number.isInteger },
+    confirmedPaymentAttempt: {
+      type: Schema.Types.ObjectId,
+      ref: "PaymentAttempt",
+    },
     paymentMethod: { type: String, enum: paymentMethods, required: true },
     status: { type: String, enum: statuses, default: "pending" },
     source: { type: String, enum: ["online", "offline"], required: true },
@@ -55,4 +68,11 @@ schema.index({ createdAt: -1, _id: -1 });
 schema.index({ status: 1, createdAt: -1 });
 schema.index({ giving: 1, createdAt: -1 });
 schema.index({ event: 1, createdAt: -1 });
+schema.index(
+  { confirmedPaymentAttempt: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { confirmedPaymentAttempt: { $type: "objectId" } },
+  },
+);
 export const Donation = model("Donation", schema);
