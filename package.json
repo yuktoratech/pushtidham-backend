@@ -14,6 +14,8 @@
     "lint": "eslint src scripts tests",
     "test": "tsx --test tests/*.test.ts",
     "seed": "tsx scripts/seed.ts",
+    "seed:official-giving": "tsx scripts/seed-official-giving.ts",
+    "seed:tentative-events": "tsx scripts/seed-tentative-events.ts",
     "db:indexes": "tsx scripts/indexes.ts",
     "payments:reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
     "payments:reconcile:paypal": "tsx scripts/reconcile-paypal.ts"

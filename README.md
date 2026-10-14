@@ -27,7 +27,7 @@ Required settings: NODE_ENV, PORT, MONGODB_URI, JWT_ACCESS_SECRET, JWT_REFRESH_S
 - `npm run lint`, `npm run typecheck`: static checks.
 - `npm run build`, `npm start`: compile and run production code.
 - `npm test`: run after building; tests also start dist/server.js. Uses mongodb-memory-server with an independent ephemeral MongoDB process and randomly generated test secrets. It never reads your configured database URI or wipes external databases. First run downloads a MongoDB binary and requires network access; cache/download artifacts stay ignored/outside Git. Tests stop their own database/process on completion.
-- `npm run seed`: explicit admin seed using environment credentials. Password must be 12+ characters and at most 72 UTF-8 bytes. Existing admin password/status are preserved. A donor email cannot be silently promoted. Development adds missing example Giving/Event records using set-on-insert; production seeds only the admin. Never wipes data.
+- `npm run seed`: explicit admin-only seed using environment credentials. Password must be 12+ characters and at most 72 UTF-8 bytes. Existing admin password/status are preserved, and a donor email cannot be silently promoted. It never creates Giving, Event, donation or payment records and never wipes data.
 - `npm run db:indexes`: explicit non-destructive index creation.
 - `npm run payments:reconcile:stripe`: reconcile a bounded batch of stale Stripe attempts from authoritative Stripe objects. Schedule this command externally; it never creates or retries a charge.
 

@@ -4,8 +4,6 @@ import { z } from "zod";
 import { loadConfig } from "../src/config/env.js";
 import { connectDatabase } from "../src/config/database.js";
 import { User } from "../src/models/user.js";
-import { Giving } from "../src/models/giving.js";
-import { Event } from "../src/models/event.js";
 import { password } from "../src/validators/auth.js";
 import { email } from "../src/validators/common.js";
 import { BCRYPT_COST } from "../src/constants/domain.js";
@@ -34,44 +32,6 @@ try {
       status: "active",
     });
     console.log("Admin created");
-  }
-  if (config.NODE_ENV === "development") {
-    await Promise.all([Giving.init(), Event.init()]);
-    for (const entry of [
-      {
-        title: "General Support",
-        slug: "general-support",
-        amountType: "fixed_and_custom",
-        fixedAmountsCents: [2500, 5000, 10000],
-      },
-      {
-        title: "Temple Service",
-        slug: "temple-service",
-        amountType: "custom",
-        fixedAmountsCents: [],
-      },
-    ])
-      await Giving.updateOne(
-        { slug: entry.slug },
-        { $setOnInsert: { ...entry, status: "active", displayOrder: 0 } },
-        { upsert: true, runValidators: true },
-      );
-    await Event.updateOne(
-      { slug: "community-gathering" },
-      {
-        $setOnInsert: {
-          title: "Community Gathering",
-          slug: "community-gathering",
-          shortDescription: "Development sample event",
-          description: "Sample for future API integration",
-          startsAt: new Date(Date.now() + 30 * 86400000),
-          location: "Temple",
-          status: "published",
-        },
-      },
-      { upsert: true, runValidators: true },
-    );
-    console.log("Development samples inserted where missing");
   }
 } catch {
   console.error(

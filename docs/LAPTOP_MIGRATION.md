@@ -81,7 +81,7 @@ For optional non-sensitive development reference records and the first admin, fi
 npm run seed
 ```
 
-The seed is additive: it retains an existing admin and inserts development Giving/Event examples only when missing. Remove seed credentials from `.env` after use if they are no longer needed.
+The seed is additive and admin-only: it retains an existing admin and never inserts Giving, Event, donation or payment records. Remove seed credentials from `.env` after use if they are no longer needed.
 
 ## Start the application
 
