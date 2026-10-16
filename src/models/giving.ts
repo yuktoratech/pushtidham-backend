@@ -5,6 +5,7 @@ const schema = new Schema(
     title: { type: String, required: true },
     slug: { type: String, required: true, lowercase: true, trim: true },
     description: { type: String, default: "" },
+    image: { type: String, default: "" },
     amountType: {
       type: String,
       enum: ["fixed", "custom", "fixed_and_custom"],

@@ -1,10 +1,20 @@
 import { z } from "zod";
 import { slug, money, paging } from "./common.js";
+const catalogImage = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine(
+    (v) => !v || /^https?:\/\//.test(v) || /^\/[a-zA-Z0-9/_.,-]+$/.test(v),
+    "Use HTTP(S) URL or asset path",
+  )
+  .default("");
 export const givingBody = z
   .object({
     title: z.string().trim().min(1).max(160),
     slug,
     description: z.string().max(10000).default(""),
+    image: catalogImage,
     amountType: z.enum(["fixed", "custom", "fixed_and_custom"]),
     fixedAmountsCents: z
       .array(money)
@@ -31,14 +41,7 @@ export const eventBody = z
       .transform((v) => new Date(v))
       .optional(),
     location: z.string().trim().min(1).max(500),
-    image: z
-      .string()
-      .max(2000)
-      .refine(
-        (v) => !v || /^https?:\/\//.test(v) || /^\/[a-zA-Z0-9/_.,-]+$/.test(v),
-        "Use HTTP(S) URL or asset path",
-      )
-      .default(""),
+    image: catalogImage,
     status: z.enum(["draft", "published", "inactive"]).default("draft"),
   })
   .strict()
@@ -51,6 +54,12 @@ export const givingStatus = z
   .strict();
 export const eventStatus = z
   .object({ status: z.enum(["draft", "published", "inactive"]) })
+  .strict();
+export const imageKindParams = z
+  .object({ kind: z.enum(["giving", "events"]) })
+  .strict();
+export const imageDeleteBody = z
+  .object({ url: z.string().url().max(2000) })
   .strict();
 export const givingQuery = z
   .object({ ...paging, status: z.enum(["active", "inactive"]).optional() })

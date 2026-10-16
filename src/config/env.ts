@@ -11,6 +11,10 @@ const boolean = z
   .transform((value) => value === "true");
 const optionalUrl = z.union([z.literal(""), z.url()]).optional().transform((v) => v || undefined);
 const optionalSecret = z.union([z.literal(""), z.string().min(16)]).optional().transform((v) => v || undefined);
+const optionalString = z
+  .union([z.literal(""), z.string().trim().min(1)])
+  .optional()
+  .transform((v) => v || undefined);
 export function seconds(value: string): number {
   const factors: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
   return Number(value.slice(0, -1)) * factors[value.slice(-1)]!;
@@ -21,6 +25,11 @@ const schema = z
       .enum(["development", "test", "production"])
       .default("development"),
     PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+    MONGODB_DATABASE: z
+      .string()
+      .trim()
+      .regex(/^[a-zA-Z0-9_-]+$/)
+      .optional(),
     MONGODB_URI: z.string().regex(/^mongodb(\+srv)?:\/\//),
     JWT_ACCESS_SECRET: secret,
     JWT_REFRESH_SECRET: secret,
@@ -37,6 +46,26 @@ const schema = z
     ADMIN_SEED_NAME: z.string().optional(),
     ADMIN_SEED_EMAIL: z.string().optional(),
     ADMIN_SEED_PASSWORD: z.string().optional(),
+    R2_ACCOUNT_ID: optionalString,
+    R2_ACCESS_KEY_ID: optionalString,
+    R2_SECRET_ACCESS_KEY: optionalString,
+    R2_BUCKET_NAME: optionalString,
+    R2_ENDPOINT: optionalUrl,
+    R2_PUBLIC_BASE_URL: optionalUrl,
+    R2_REGION: z.string().trim().min(1).default("auto"),
+    R2_FORCE_PATH_STYLE: boolean,
+    R2_SIGNED_URL_EXPIRES_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(60)
+      .max(3600)
+      .default(900),
+    PRODUCT_IMAGE_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(8 * 1024 * 1024)
+      .default(8 * 1024 * 1024),
     STRIPE_SECRET_KEY: optionalSecret,
     STRIPE_WEBHOOK_SECRET: optionalSecret,
     STRIPE_API_VERSION: z.literal("2026-09-30.endive").default("2026-09-30.endive"),
@@ -105,6 +134,45 @@ const schema = z
         code: "custom",
         path: ["COOKIE_SAME_SITE"],
         message: "Cross-site cookies require production HTTPS",
+      });
+    const storageKeys = [
+      "R2_ACCOUNT_ID",
+      "R2_ENDPOINT",
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY",
+      "R2_BUCKET_NAME",
+      "R2_PUBLIC_BASE_URL",
+    ] as const;
+    const storageStarted = storageKeys.some((key) => v[key]);
+    if (v.NODE_ENV === "production" && storageStarted) {
+      if (!v.R2_ACCOUNT_ID && !v.R2_ENDPOINT)
+        c.addIssue({
+          code: "custom",
+          path: ["R2_ACCOUNT_ID"],
+          message: "R2 account ID or endpoint is required",
+        });
+      for (const key of [
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET_NAME",
+        "R2_PUBLIC_BASE_URL",
+      ] as const)
+        if (!v[key])
+          c.addIssue({
+            code: "custom",
+            path: [key],
+            message: "Required when R2 image storage is configured",
+          });
+    }
+    if (
+      v.NODE_ENV === "production" &&
+      (v.R2_ENDPOINT?.startsWith("http://") ||
+        v.R2_PUBLIC_BASE_URL?.startsWith("http://"))
+    )
+      c.addIssue({
+        code: "custom",
+        path: ["R2_PUBLIC_BASE_URL"],
+        message: "Production image storage requires HTTPS",
       });
     const stripeEnabled = v.STRIPE_CARD_ENABLED || v.STRIPE_ACH_ENABLED;
     if (stripeEnabled) {

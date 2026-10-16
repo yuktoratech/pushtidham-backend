@@ -12,9 +12,17 @@ import { log } from "./utils/logger.js";
 import type { StripeGateway } from "./services/stripe-gateway.js";
 import { StripeSdkGateway } from "./services/stripe-gateway.js";
 import { PayPalHttpGateway, type PayPalGateway } from "./services/paypal-gateway.js";
+import {
+  createImageStorage,
+  type ImageStorage,
+} from "./services/image-storage.js";
 export function createApp(
   config: Config,
-  dependencies: { stripe?: StripeGateway; paypal?: PayPalGateway } = {},
+  dependencies: {
+    stripe?: StripeGateway;
+    paypal?: PayPalGateway;
+    images?: ImageStorage;
+  } = {},
 ) {
   const app = express();
   app.disable("x-powered-by");
@@ -75,7 +83,8 @@ export function createApp(
       ? new StripeSdkGateway(config.STRIPE_SECRET_KEY, config.STRIPE_API_VERSION)
       : undefined);
   const paypal = dependencies.paypal ?? (config.PAYPAL_ENABLED ? new PayPalHttpGateway(config) : undefined);
-  app.use("/api/v1", routes(config, { stripe, paypal }));
+  const images = dependencies.images ?? createImageStorage(config);
+  app.use("/api/v1", routes(config, { stripe, paypal, images }));
   app.use((_req, _res, next) =>
     next(new AppError(404, "NOT_FOUND", "Route not found")),
   );

@@ -38,16 +38,24 @@ import { PayPalEventService } from "../services/paypal-events.js";
 import { paypalController } from "../controllers/paypal.js";
 import { paymentCapabilitiesController } from "../controllers/payment-capabilities.js";
 import { financialReportController } from "../controllers/financial-reports.js";
+import { imageController } from "../controllers/images.js";
+import type { ImageStorage } from "../services/image-storage.js";
+import { imageDeleteBody, imageKindParams } from "../validators/catalog.js";
 export function routes(
   config: Config,
-  dependencies: { stripe?: StripeGateway; paypal?: PayPalGateway } = {},
+  dependencies: {
+    stripe?: StripeGateway;
+    paypal?: PayPalGateway;
+    images?: ImageStorage;
+  } = {},
 ) {
   const router = Router();
   const auth = new AuthService(config);
-  const catalog = new CatalogService();
+  const catalog = new CatalogService(dependencies.images);
   const donations = new DonationService();
   const a = authController(auth, config);
   const admin = Router();
+  const images = imageController(config, dependencies.images);
   const stripeCheckout = dependencies.stripe
     ? new StripeCheckoutService(config, dependencies.stripe)
     : undefined;
@@ -155,6 +163,19 @@ export function routes(
       ac.remove,
     );
   }
+  admin.post(
+    "/uploads/:kind",
+    images.available,
+    validate({ params: imageKindParams }),
+    images.parse,
+    images.upload,
+  );
+  admin.delete(
+    "/uploads",
+    images.available,
+    validate({ body: imageDeleteBody }),
+    images.remove,
+  );
   const d = donationController(donations);
   router.post(
     "/donations",

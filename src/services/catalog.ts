@@ -5,7 +5,18 @@ import type { GivingInput, EventInput } from "../validators/catalog.js";
 import type { ListQuery } from "../validators/common.js";
 import { paginate, escapeRegex } from "../utils/pagination.js";
 import { missing, AppError } from "../utils/errors.js";
+import type { ImageStorage } from "./image-storage.js";
 export class CatalogService {
+  constructor(private readonly images?: ImageStorage) {}
+
+  private async removeManagedImage(url: string | undefined) {
+    if (!url || !this.images) return;
+    try {
+      await this.images.deleteManagedUrl(url);
+    } catch {
+      // Catalog changes remain successful if best-effort object cleanup fails.
+    }
+  }
   async listGiving(
     query: ListQuery & {
       status?: string;
@@ -70,6 +81,7 @@ export class CatalogService {
       title: input.title,
       slug: input.slug,
       description: input.description,
+      image: input.image,
       amountType: input.amountType,
       fixedAmountsCents:
         input.amountType === "custom" ? [] : input.fixedAmountsCents,
@@ -93,21 +105,27 @@ export class CatalogService {
   async replaceGiving(id: string, input: GivingInput) {
     const doc = await Giving.findOne({ _id: id, deletedAt: null });
     if (!doc) missing("Giving");
+    const previousImage = doc.image;
     doc.set({
       title: input.title,
       slug: input.slug,
       description: input.description,
+      image: input.image,
       amountType: input.amountType,
       fixedAmountsCents:
         input.amountType === "custom" ? [] : input.fixedAmountsCents,
       status: input.status,
       displayOrder: input.displayOrder,
     });
-    return doc.save();
+    const saved = await doc.save();
+    if (previousImage !== input.image)
+      await this.removeManagedImage(previousImage);
+    return saved;
   }
   async replaceEvent(id: string, input: EventInput) {
     const doc = await Event.findOne({ _id: id, deletedAt: null });
     if (!doc) missing("Event");
+    const previousImage = doc.image;
     doc.set({
       title: input.title,
       slug: input.slug,
@@ -119,7 +137,10 @@ export class CatalogService {
       image: input.image,
       status: input.status,
     });
-    return doc.save();
+    const saved = await doc.save();
+    if (previousImage !== input.image)
+      await this.removeManagedImage(previousImage);
+    return saved;
   }
   async status(kind: "giving" | "event", id: string, status: string) {
     const update = { $set: { status } };
@@ -153,5 +174,6 @@ export class CatalogService {
             { $set: { status: "inactive", deletedAt: new Date() } },
           );
     if (!doc) missing(kind);
+    await this.removeManagedImage(doc.image);
   }
 }
