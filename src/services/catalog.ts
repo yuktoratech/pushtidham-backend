@@ -9,6 +9,19 @@ import type { ImageStorage } from "./image-storage.js";
 export class CatalogService {
   constructor(private readonly images?: ImageStorage) {}
 
+  private async createWithSlug<T>(kind: "giving" | "event", title: string, requested: string | undefined, create: (slug: string) => Promise<T>): Promise<T> {
+    if (requested) return create(requested);
+    const base = title.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 150).replace(/-$/g, "") || kind;
+    for (let attempt = 1; attempt <= 100; attempt++) {
+      const suffix = attempt === 1 ? "" : `-${attempt}`;
+      const candidate = `${base.slice(0, 160 - suffix.length)}${suffix}`;
+      try {return await create(candidate);} catch (error) {
+        if ((error as {code?: number}).code !== 11000) throw error;
+      }
+    }
+    throw new AppError(409, "SLUG_CONFLICT", "Could not allocate a unique URL slug");
+  }
+
   private async removeManagedImage(url: string | undefined) {
     if (!url || !this.images) return;
     try {
@@ -77,9 +90,9 @@ export class CatalogService {
     return doc ?? missing(kind);
   }
   async createGiving(input: GivingInput) {
-    return Giving.create({
+    return this.createWithSlug("giving", input.title, input.slug, slug => Giving.create({
       title: input.title,
-      slug: input.slug,
+      slug,
       description: input.description,
       image: input.image,
       amountType: input.amountType,
@@ -87,12 +100,12 @@ export class CatalogService {
         input.amountType === "custom" ? [] : input.fixedAmountsCents,
       status: input.status,
       displayOrder: input.displayOrder,
-    });
+    }));
   }
   async createEvent(input: EventInput) {
-    return Event.create({
+    return this.createWithSlug("event", input.title, input.slug, slug => Event.create({
       title: input.title,
-      slug: input.slug,
+      slug,
       shortDescription: input.shortDescription,
       description: input.description,
       startsAt: input.startsAt,
@@ -100,7 +113,7 @@ export class CatalogService {
       location: input.location,
       image: input.image,
       status: input.status,
-    });
+    }));
   }
   async replaceGiving(id: string, input: GivingInput) {
     const doc = await Giving.findOne({ _id: id, deletedAt: null });
@@ -108,7 +121,7 @@ export class CatalogService {
     const previousImage = doc.image;
     doc.set({
       title: input.title,
-      slug: input.slug,
+      slug: input.slug ?? doc.slug,
       description: input.description,
       image: input.image,
       amountType: input.amountType,
@@ -128,7 +141,7 @@ export class CatalogService {
     const previousImage = doc.image;
     doc.set({
       title: input.title,
-      slug: input.slug,
+      slug: input.slug ?? doc.slug,
       shortDescription: input.shortDescription,
       description: input.description,
       startsAt: input.startsAt,

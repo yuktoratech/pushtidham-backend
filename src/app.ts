@@ -16,12 +16,14 @@ import {
   createImageStorage,
   type ImageStorage,
 } from "./services/image-storage.js";
+import {ResendMailSender, type MailSender} from "./services/mail.js";
 export function createApp(
   config: Config,
   dependencies: {
     stripe?: StripeGateway;
     paypal?: PayPalGateway;
     images?: ImageStorage;
+    mail?: MailSender;
   } = {},
 ) {
   const app = express();
@@ -84,7 +86,8 @@ export function createApp(
       : undefined);
   const paypal = dependencies.paypal ?? (config.PAYPAL_ENABLED ? new PayPalHttpGateway(config) : undefined);
   const images = dependencies.images ?? createImageStorage(config);
-  app.use("/api/v1", routes(config, { stripe, paypal, images }));
+  const mail = dependencies.mail ?? (config.RESEND_API_KEY ? new ResendMailSender(config) : undefined);
+  app.use("/api/v1", routes(config, { stripe, paypal, images, mail }));
   app.use((_req, _res, next) =>
     next(new AppError(404, "NOT_FOUND", "Route not found")),
   );

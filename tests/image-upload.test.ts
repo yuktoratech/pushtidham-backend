@@ -131,6 +131,18 @@ test("valid JPEG, PNG and WebP uploads are optimized to WebP before storage", as
     assert.equal((await sharp(stored.bytes).metadata()).format, "webp");
   }
 });
+test("an uploaded image can be saved with a new Giving record and an automatic slug", async () => {
+  const uploaded = await request(app).post("/api/v1/admin/uploads/giving").set({Authorization: `Bearer ${adminToken}`}).attach("image", png(), {filename: "giving.png", contentType: "image/png"});
+  assert.equal(uploaded.status, 201);
+  const created = await request(app).post("/api/v1/admin/giving").set({Authorization: `Bearer ${adminToken}`}).send({title: "New Image Seva", description: "Test image", image: uploaded.body.data.url, amountType: "fixed", fixedAmountsCents: [1000], status: "active", displayOrder: 1});
+  assert.equal(created.status, 201);
+  assert.equal(created.body.data.slug, "new-image-seva");
+  assert.equal(created.body.data.image, uploaded.body.data.url);
+  assert.equal((await Giving.findById(created.body.data._id))?.image, uploaded.body.data.url);
+  const renamed = await request(app).put(`/api/v1/admin/giving/${created.body.data._id}`).set({Authorization: `Bearer ${adminToken}`}).send({title: "Renamed Image Seva", description: "Test image", image: uploaded.body.data.url, amountType: "fixed", fixedAmountsCents: [1000], status: "active", displayOrder: 1});
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.data.slug, "new-image-seva");
+});
 
 test("spoofed, malformed and oversized images are rejected before storage", async () => {
   const uploadedBefore = mock.uploads.length;

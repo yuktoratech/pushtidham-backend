@@ -10,7 +10,10 @@ import { validate } from "../middleware/validate.js";
 import { authController } from "../controllers/auth.js";
 import { catalogController } from "../controllers/catalog.js";
 import { donationController } from "../controllers/donations.js";
-import { register, login, empty } from "../validators/auth.js";
+import { register, login, empty, profile, changePassword, forgotPassword, resetPassword } from "../validators/auth.js";
+import {contactBody} from "../validators/contact.js";
+import type {MailSender} from "../services/mail.js";
+import {AppError} from "../utils/errors.js";
 import { idParams, slugParams, listQuery } from "../validators/common.js";
 import {
   givingBody,
@@ -24,6 +27,7 @@ import {
   onlineBody,
   offlineBody,
   donationQuery,
+  donationExportQuery,
   statusBody,
   financialReportQuery,
 } from "../validators/donation.js";
@@ -38,6 +42,8 @@ import { PayPalEventService } from "../services/paypal-events.js";
 import { paypalController } from "../controllers/paypal.js";
 import { paymentCapabilitiesController } from "../controllers/payment-capabilities.js";
 import { financialReportController } from "../controllers/financial-reports.js";
+import {ReceiptService} from "../services/receipts.js";
+import {exportDonations} from "../services/donation-export.js";
 import { imageController } from "../controllers/images.js";
 import type { ImageStorage } from "../services/image-storage.js";
 import { imageDeleteBody, imageKindParams } from "../validators/catalog.js";
@@ -47,13 +53,15 @@ export function routes(
     stripe?: StripeGateway;
     paypal?: PayPalGateway;
     images?: ImageStorage;
+    mail?: MailSender;
   } = {},
 ) {
   const router = Router();
   const auth = new AuthService(config);
   const catalog = new CatalogService(dependencies.images);
   const donations = new DonationService();
-  const a = authController(auth, config);
+  const receipts = new ReceiptService();
+  const a = authController(auth, config, dependencies.mail);
   const admin = Router();
   const images = imageController(config, dependencies.images);
   const stripeCheckout = dependencies.stripe
@@ -108,6 +116,17 @@ export function routes(
   );
   router.post("/auth/logout", a.trusted, validate({ body: empty }), a.logout);
   router.get("/auth/me", authenticate(auth), a.me);
+  router.patch("/auth/profile", authenticate(auth), authorizeRoles("donor"), validate({body: profile}), a.profile);
+  router.post("/auth/change-password", limiter, authenticate(auth), authorizeRoles("donor"), validate({body: changePassword}), a.changePassword);
+  router.post("/auth/forgot-password", limiter, validate({body: forgotPassword}), a.forgotPassword);
+  router.post("/auth/reset-password", limiter, validate({body: resetPassword}), a.resetPassword);
+  const contactLimiter = rateLimit({windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false});
+  router.post("/contact", contactLimiter, a.trusted, validate({body: contactBody}), async (req, res) => {
+    if (!dependencies.mail || !config.CONTACT_TO) throw new AppError(503, "MAIL_UNAVAILABLE", "Online contact delivery is unavailable");
+    const body = req.validated.body as {name: string; email: string; phone: string; subject: string; message: string};
+    await dependencies.mail.send({to: config.CONTACT_TO, replyTo: body.email, subject: `Website enquiry: ${body.subject}`, text: `From: ${body.name}\nEmail: ${body.email}\nPhone: ${body.phone || "Not provided"}\n\n${body.message}`});
+    res.status(202).json({success: true, data: null});
+  });
   router.post("/webhooks/stripe", stripe.webhook);
   router.post("/webhooks/paypal", paypal.webhook);
   router.post(
@@ -195,11 +214,20 @@ export function routes(
     validate({ params: idParams }),
     d.get,
   );
+  router.get("/donations/:id/receipt", authenticate(auth), authorizeRoles("donor"), validate({params: idParams}), async (req, res) => {
+    const result = await receipts.create((req.validated.params as {id: string}).id, req.principal!.id);
+    res.set({"Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${result.filename}"`, "Cache-Control": "no-store"}).send(Buffer.from(result.bytes));
+  });
   const ad = donationController(donations, true);
   admin.get("/donations", validate({ query: donationQuery }), ad.list);
+  admin.get("/donations/export.csv", validate({query: donationExportQuery}), async (req, res) => exportDonations(req.validated.query as import("../validators/donation.js").DonationExportQuery, res));
   admin.get("/reports/financial", validate({ query: financialReportQuery }), financialReportController());
   admin.post("/donations/offline", validate({ body: offlineBody }), ad.create);
   admin.get("/donations/:id", validate({ params: idParams }), ad.get);
+  admin.get("/donations/:id/receipt", validate({params: idParams}), async (req, res) => {
+    const result = await receipts.create((req.validated.params as {id: string}).id);
+    res.set({"Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${result.filename}"`, "Cache-Control": "no-store"}).send(Buffer.from(result.bytes));
+  });
   admin.patch(
     "/donations/:id/status",
     validate({ params: idParams, body: statusBody }),

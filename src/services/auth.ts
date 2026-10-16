@@ -7,16 +7,19 @@ import { User } from "../models/user.js";
 import { Session } from "../models/session.js";
 import { AppError } from "../utils/errors.js";
 import { BCRYPT_COST } from "../constants/domain.js";
+import type {MailSender} from "./mail.js";
 export const safeUser = (user: {
   _id: unknown;
   name: string;
   email: string;
+  phone?: string;
   role: string;
   status: string;
 }) => ({
   id: String(user._id),
   name: user.name,
   email: user.email,
+  phone: user.phone ?? "",
   role: user.role,
   status: user.status,
 });
@@ -95,11 +98,12 @@ export class AuthService {
     });
     return { ...tokens, user: safeUser(user) };
   }
-  async register(input: { name: string; email: string; password: string }) {
+  async register(input: { name: string; email: string; password: string; phone?: string }) {
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_COST);
     const user = await User.create({
       name: input.name,
       email: input.email,
+      phone: input.phone ?? "",
       passwordHash,
       role: "donor",
       status: "active",
@@ -139,6 +143,7 @@ export class AuthService {
       );
       throw denied();
     }
+    if (user.passwordChangedAt && session.createdAt < user.passwordChangedAt) throw denied();
     const tokens = this.tokens(
       String(user._id),
       session.sessionId,
@@ -188,10 +193,55 @@ export class AuthService {
       }),
     ]);
     if (!user || user.status !== "active" || !session) throw denied();
+    if (user.passwordChangedAt) {
+      const validSession = await Session.exists({sessionId: claims.sid, user: claims.sub, createdAt: {$gte: user.passwordChangedAt}});
+      if (!validSession) throw denied();
+    }
     return {
       id: user._id,
       role: user.role as "donor" | "admin",
       sessionId: claims.sid,
     };
+  }
+  async updateProfile(userId: string, input: {name: string; email: string; phone: string}) {
+    const user = await User.findOneAndUpdate(
+      {_id: userId, role: "donor", status: "active"},
+      {$set: {name: input.name, email: input.email, phone: input.phone}},
+      {new: true, runValidators: true},
+    );
+    if (!user) throw denied();
+    return safeUser(user);
+  }
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await User.findOne({_id: userId, role: "donor", status: "active"}).select("+passwordHash");
+    if (!user) throw denied();
+    if (!await bcrypt.compare(currentPassword, user.passwordHash))
+      throw new AppError(400, "INVALID_CURRENT_PASSWORD", "Current password is incorrect");
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);
+    const changedAt = new Date();
+    const updated = await User.updateOne({_id: user._id, passwordHash: user.passwordHash}, {$set: {passwordHash, passwordChangedAt: changedAt}});
+    if (!updated.modifiedCount) throw new AppError(409, "PASSWORD_CHANGED", "Password changed in another session; please sign in again");
+    await Session.updateMany({user: user._id, revokedAt: null}, {$set: {revokedAt: changedAt}});
+  }
+  async requestPasswordReset(email: string, mail: MailSender | undefined, frontendUrl: string) {
+    if (!mail) throw new AppError(503, "MAIL_UNAVAILABLE", "Email service is not configured");
+    const user = await User.findOne({email, role: "donor", status: "active"});
+    if (!user) return;
+    const token = randomBytes(32).toString("hex");
+    const resetTokenHash = hash(token);
+    await User.updateOne({_id: user._id}, {$set: {resetTokenHash, resetExpiresAt: new Date(Date.now() + 30 * 60_000)}});
+    const url = new URL("/reset-password", frontendUrl);
+    url.searchParams.set("token", token);
+    await mail.send({to: user.email, subject: "Pushtidham password reset", text: `A password reset was requested for your account. This link expires in 30 minutes:\n${url.href}\n\nIf you did not request this, you can ignore this email.`});
+  }
+  async resetPassword(token: string, newPassword: string) {
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);
+    const changedAt = new Date();
+    const user = await User.findOneAndUpdate(
+      {resetTokenHash: hash(token), resetExpiresAt: {$gt: changedAt}, role: "donor", status: "active"},
+      {$set: {passwordHash, passwordChangedAt: changedAt}, $unset: {resetTokenHash: 1, resetExpiresAt: 1}},
+    );
+    if (!user) throw new AppError(400, "INVALID_RESET_TOKEN", "Reset link is invalid or expired");
+    await Session.updateMany({user: user._id, revokedAt: null}, {$set: {revokedAt: changedAt}});
   }
 }

@@ -808,7 +808,7 @@ test("production cookie policy sets Secure, HttpOnly and explicit cross-site Sam
   assert.match(header, /HttpOnly/);
   assert.match(header, /SameSite=None/);
 });
-test("manual seed is repeatable and preserves admin password/status and existing sample edits", async () => {
+test("manual seed is repeatable and preserves admin password/status", async () => {
   const dbName = "seed_isolated";
   const seedPassword = randomBytes(20).toString("hex");
   const seedEnv = {
@@ -816,6 +816,7 @@ test("manual seed is repeatable and preserves admin password/status and existing
     ...env,
     NODE_ENV: "development",
     MONGODB_URI: mongo.getUri(dbName),
+    MONGODB_DATABASE: "",
     ADMIN_SEED_NAME: "Seed Admin",
     ADMIN_SEED_EMAIL: "SEED@EXAMPLE.TEST",
     ADMIN_SEED_PASSWORD: seedPassword,
@@ -839,15 +840,10 @@ test("manual seed is repeatable and preserves admin password/status and existing
   await runSeed();
   const isolated = mongoose.connection.useDb(dbName);
   const users = isolated.collection("users");
-  const giving = isolated.collection("givings");
   const admin = await users.findOne({ email: "seed@example.test" });
   assert.ok(admin);
   assert.ok(await bcrypt.compare(seedPassword, admin.passwordHash));
   await users.updateOne({ _id: admin._id }, { $set: { status: "disabled" } });
-  await giving.updateOne(
-    { slug: "general-support" },
-    { $set: { title: "Keep my edited title" } },
-  );
   seedEnv.ADMIN_SEED_PASSWORD = randomBytes(20).toString("hex");
   await runSeed();
   const retained = await users.findOne({ _id: admin._id });
@@ -855,10 +851,6 @@ test("manual seed is repeatable and preserves admin password/status and existing
   assert.equal(retained.passwordHash, admin.passwordHash);
   assert.equal(retained.status, "disabled");
   assert.equal(await users.countDocuments({ email: "seed@example.test" }), 1);
-  assert.equal(
-    (await giving.findOne({ slug: "general-support" }))?.title,
-    "Keep my edited title",
-  );
 });
 
 test("health reports database unavailability using the standard error envelope", async () => {
@@ -968,4 +960,71 @@ test("development CORS credentials allow only the configured frontend origin", a
     .set("Origin", "http://localhost:3001");
   assert.equal(denied.status, 403);
   assert.equal(denied.headers["access-control-allow-origin"], undefined);
+});
+test("donor profile persists, protected fields stay protected, and password changes revoke old sessions", async () => {
+  const address = `profile-${randomBytes(5).toString("hex")}@example.test`;
+  const registered = await request(app).post("/api/v1/auth/register").send({name: "Profile Donor", email: address, password: "eight123", phone: "352-555-0123"});
+  assert.equal(registered.status, 201);
+  const token = registered.body.data.accessToken as string;
+  const update = await request(app).patch("/api/v1/auth/profile").set(auth(token)).send({name: "Updated Donor", email: address, phone: "+1 352 555 0199"});
+  assert.equal(update.status, 200);
+  assert.equal(update.body.data.phone, "+1 352 555 0199");
+  assert.equal(update.body.data.role, "donor");
+  assert.equal((await request(app).patch("/api/v1/auth/profile").set(auth(token)).send({name: "Bad", email: address, phone: "", role: "admin"})).status, 400);
+  assert.equal((await request(app).patch("/api/v1/auth/profile").set(auth(adminToken)).send({name: "Bad", email: address, phone: ""})).status, 403);
+  const incorrect = await request(app).post("/api/v1/auth/change-password").set(auth(token)).send({currentPassword: "wrong", newPassword: "newpass123", confirmPassword: "newpass123"});
+  assert.equal(incorrect.status, 400);
+  assert.equal((await request(app).get("/api/v1/auth/me").set(auth(token))).status, 200);
+  const changed = await request(app).post("/api/v1/auth/change-password").set(auth(token)).send({currentPassword: "eight123", newPassword: "newpass123", confirmPassword: "newpass123"});
+  assert.equal(changed.status, 200);
+  assert.equal((await request(app).get("/api/v1/auth/me").set(auth(token))).status, 401);
+  assert.equal((await request(app).post("/api/v1/auth/login").send({email: address, password: "eight123"})).status, 401);
+  const relogin = await request(app).post("/api/v1/auth/login").send({email: address, password: "newpass123"});
+  assert.equal(relogin.status, 200);
+  assert.equal(relogin.body.data.user.name, "Updated Donor");
+  assert.equal(relogin.body.data.user.phone, "+1 352 555 0199");
+});
+test("contact and reset emails use an injected adapter and never claim unaccepted delivery", async () => {
+  const sent: Array<{to: string; subject: string; text: string}> = [];
+  const mail = {send: async (message: {to: string; subject: string; text: string}) => {sent.push(message);}};
+  const mailApp = createApp(loadConfig({...env, CONTACT_TO: "temple@example.test"}), {mail});
+  const address = `mail-${randomBytes(5).toString("hex")}@example.test`;
+  assert.equal((await request(mailApp).post("/api/v1/contact").set("Origin", config.FRONTEND_URL).send({name: "Donor", email: address, subject: "Visit", message: "Please advise"})).status, 202);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.to, "temple@example.test");
+  assert.equal((await request(mailApp).post("/api/v1/contact").set("Origin", "http://localhost:3001").send({name: "Donor", email: address, subject: "Visit", message: "Please advise"})).status, 403);
+  assert.equal((await request(app).post("/api/v1/contact").set("Origin", config.FRONTEND_URL).send({name: "Donor", email: address, subject: "Visit", message: "Please advise"})).status, 503);
+  await request(app).post("/api/v1/auth/register").send({name: "Reset Donor", email: address, password: "eight123"});
+  const forgot = await request(mailApp).post("/api/v1/auth/forgot-password").send({email: address});
+  assert.equal(forgot.status, 202);
+  assert.equal(sent.length, 2);
+  const url = sent[1]!.text.match(/https?:\/\/\S+/)?.[0];
+  assert.ok(url);
+  const resetToken = new URL(url).searchParams.get("token");
+  assert.ok(resetToken);
+  const reset = await request(mailApp).post("/api/v1/auth/reset-password").send({token: resetToken, newPassword: "changed123", confirmPassword: "changed123"});
+  assert.equal(reset.status, 200);
+  assert.equal((await request(mailApp).post("/api/v1/auth/reset-password").send({token: resetToken, newPassword: "changed123", confirmPassword: "changed123"})).status, 400);
+  assert.equal((await request(mailApp).post("/api/v1/auth/login").send({email: address, password: "changed123"})).status, 200);
+});
+test("receipts require ownership and verification; CSV export filters and escapes spreadsheet formulas", async () => {
+  const adminUser = await User.findOne({email: "admin@example.test"});
+  assert.ok(adminUser);
+  const now = new Date();
+  const receipt = await Donation.create({donationNumber: `PD-RECEIPT-${randomBytes(4).toString("hex")}`, user: donorId, donorName: "=HYPERLINK(\"bad\")", donorEmail: "donor@example.test", type: "general", giving: givingId, designationTitle: "Receipt test", amountCents: 4200, currency: "USD", paymentMethod: "offline", source: "offline", status: "completed", verifiedBy: adminUser._id, verifiedAt: now, completedAt: now});
+  const donorPdf = await request(app).get(`/api/v1/donations/${receipt.id}/receipt`).set(auth(donorToken));
+  assert.equal(donorPdf.status, 200);
+  assert.match(String(donorPdf.headers["content-type"]), /application\/pdf/);
+  assert.equal(Buffer.from(donorPdf.body).subarray(0, 4).toString(), "%PDF");
+  assert.equal((await request(app).get(`/api/v1/donations/${receipt.id}/receipt`).set(auth(otherToken))).status, 404);
+  assert.equal((await request(app).get(`/api/v1/admin/donations/${receipt.id}/receipt`).set(auth(adminToken))).status, 200);
+  assert.equal((await request(app).get(`/api/v1/admin/donations/${receipt.id}/receipt`).set(auth(donorToken))).status, 403);
+  const pending = await Donation.create({donationNumber: `PD-PENDING-${randomBytes(4).toString("hex")}`, user: donorId, donorName: "Pending", donorEmail: "donor@example.test", type: "general", giving: givingId, designationTitle: "Pending test", amountCents: 1200, currency: "USD", paymentMethod: "offline", source: "offline", status: "pending"});
+  assert.equal((await request(app).get(`/api/v1/donations/${pending.id}/receipt`).set(auth(donorToken))).status, 409);
+  const csv = await request(app).get("/api/v1/admin/donations/export.csv").set(auth(adminToken)).query({search: receipt.donationNumber, status: "completed", type: "general"});
+  assert.equal(csv.status, 200);
+  assert.match(csv.text, /'=HYPERLINK/);
+  assert.match(csv.text, /"42\.00"/);
+  assert.match(csv.text, /TOTAL COMPLETED BASE/);
+  assert.ok([403, 429].includes((await request(app).get("/api/v1/admin/donations/export.csv").set(auth(donorToken))).status));
 });

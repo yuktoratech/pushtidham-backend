@@ -9,6 +9,7 @@ export class FinancialReportService {
     if(query.from||query.to) match.createdAt={...(query.from?{$gte:new Date(query.from)}:{}),...(query.to?{$lte:new Date(query.to)}:{})};
     if(query.paymentMethod) match.paymentMethod=query.paymentMethod;
     if(query.type) match.type=query.type;
+    if(query.status) match.status=query.status;
     const rows=await Donation.aggregate([
       {$match:match},
       {$lookup:{from:"paymentattempts",localField:"confirmedPaymentAttempt",foreignField:"_id",as:"attempts"}},
@@ -29,6 +30,6 @@ export class FinancialReportService {
       }}
     ]);
     const result=rows[0]??{summary:[],providers:[],designations:[]};
-    return {timezone:"UTC",range:{from:query.from??null,to:query.to??null},summary:result.summary[0]??emptySummary,providers:result.providers.map((r:Record<string,unknown>)=>({provider:r._id,...r,_id:undefined})),designations:result.designations.map((r:Record<string,unknown>)=>({designation:r._id,...r,_id:undefined}))};
+    return {timezone:"America/New_York",range:{from:query.from??null,to:query.to??null},summary:result.summary[0]??emptySummary,providers:result.providers.map((r:Record<string,unknown>)=>({provider:r._id,...r,_id:undefined})),designations:result.designations.map((r:Record<string,unknown>)=>({designation:r._id,...r,_id:undefined}))};
   }
 }

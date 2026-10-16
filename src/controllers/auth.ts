@@ -4,8 +4,9 @@ import { AuthService, safeUser } from "../services/auth.js";
 import { User } from "../models/user.js";
 import { AppError } from "../utils/errors.js";
 import type { z } from "zod";
-import type { register, login } from "../validators/auth.js";
-export function authController(auth: AuthService, config: Config) {
+import type { register, login, profile, changePassword, forgotPassword, resetPassword } from "../validators/auth.js";
+import type {MailSender} from "../services/mail.js";
+export function authController(auth: AuthService, config: Config, mail?: MailSender) {
   const cookie: CookieOptions = {
     httpOnly: true,
     secure: config.NODE_ENV === "production",
@@ -39,7 +40,7 @@ export function authController(auth: AuthService, config: Config) {
     next();
   };
   const handlers: Record<
-    "register" | "login" | "refresh" | "logout" | "me",
+    "register" | "login" | "refresh" | "logout" | "me" | "profile" | "changePassword" | "forgotPassword" | "resetPassword",
     RequestHandler
   > = {
     register: async (req, res) =>
@@ -70,6 +71,26 @@ export function authController(auth: AuthService, config: Config) {
       if (!user)
         throw new AppError(401, "UNAUTHENTICATED", "Authentication required");
       res.json({ success: true, data: safeUser(user) });
+    },
+    profile: async (req, res) => {
+      const user = await auth.updateProfile(String(req.principal!.id), req.validated.body as z.infer<typeof profile>);
+      res.json({success: true, data: user});
+    },
+    changePassword: async (req, res) => {
+      const body = req.validated.body as z.infer<typeof changePassword>;
+      await auth.changePassword(String(req.principal!.id), body.currentPassword, body.newPassword);
+      res.clearCookie("refresh_token", cookie);
+      res.json({success: true, data: null});
+    },
+    forgotPassword: async (req, res) => {
+      const body = req.validated.body as z.infer<typeof forgotPassword>;
+      await auth.requestPasswordReset(body.email, mail, config.FRONTEND_URL);
+      res.status(202).json({success: true, data: null});
+    },
+    resetPassword: async (req, res) => {
+      const body = req.validated.body as z.infer<typeof resetPassword>;
+      await auth.resetPassword(body.token, body.newPassword);
+      res.json({success: true, data: null});
     },
   };
   return { ...handlers, trusted };

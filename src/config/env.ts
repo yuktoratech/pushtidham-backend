@@ -25,11 +25,10 @@ const schema = z
       .enum(["development", "test", "production"])
       .default("development"),
     PORT: z.coerce.number().int().min(1).max(65535).default(4000),
-    MONGODB_DATABASE: z
-      .string()
-      .trim()
-      .regex(/^[a-zA-Z0-9_-]+$/)
-      .optional(),
+    MONGODB_DATABASE: z.union([
+      z.literal(""),
+      z.string().trim().regex(/^[a-zA-Z0-9_-]+$/),
+    ]).optional().transform((value) => value || undefined),
     MONGODB_URI: z.string().regex(/^mongodb(\+srv)?:\/\//),
     JWT_ACCESS_SECRET: secret,
     JWT_REFRESH_SECRET: secret,
@@ -46,6 +45,9 @@ const schema = z
     ADMIN_SEED_NAME: z.string().optional(),
     ADMIN_SEED_EMAIL: z.string().optional(),
     ADMIN_SEED_PASSWORD: z.string().optional(),
+    RESEND_API_KEY: optionalSecret,
+    MAIL_FROM: optionalString,
+    CONTACT_TO: optionalString,
     R2_ACCOUNT_ID: optionalString,
     R2_ACCESS_KEY_ID: optionalString,
     R2_SECRET_ACCESS_KEY: optionalString,
@@ -135,6 +137,8 @@ const schema = z
         path: ["COOKIE_SAME_SITE"],
         message: "Cross-site cookies require production HTTPS",
       });
+    if (v.RESEND_API_KEY && (!v.MAIL_FROM || !v.CONTACT_TO))
+      c.addIssue({code: "custom", path: ["MAIL_FROM"], message: "MAIL_FROM and CONTACT_TO are required for email"});
     const storageKeys = [
       "R2_ACCOUNT_ID",
       "R2_ENDPOINT",

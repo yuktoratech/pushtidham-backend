@@ -82,30 +82,7 @@ export class DonationService {
     );
   }
   async list(query: DonationQuery, user?: Types.ObjectId, admin = false) {
-    const filter: Record<string, unknown> = {};
-    if (user) filter.user = user;
-    for (const key of [
-      "type",
-      "paymentMethod",
-      "status",
-      "source",
-      "giving",
-      "event",
-    ] as const)
-      if (query[key]) filter[key] = query[key];
-    if (query.from || query.to)
-      filter.createdAt = {
-        ...(query.from ? { $gte: new Date(query.from) } : {}),
-        ...(query.to ? { $lte: new Date(query.to) } : {}),
-      };
-    if (query.search) {
-      const regex = { $regex: escapeRegex(query.search), $options: "i" };
-      filter.$or = [
-        { donationNumber: regex },
-        { donorName: regex },
-        { donorEmail: regex },
-      ];
-    }
+    const filter = donationFilter(query, user);
     const result = await paginate(Donation, filter, query);
     return { ...result, data: await donationViews(result.data as unknown as Array<Record<string,unknown> & {_id:Types.ObjectId}>, admin) };
   }
@@ -201,4 +178,16 @@ export class DonationService {
       );
     return doc;
   }
+}
+export function donationFilter(query: DonationQuery, user?: Types.ObjectId) {
+  const filter: Record<string, unknown> = {};
+  if (user) filter.user = user;
+  for (const key of ["type", "paymentMethod", "status", "source", "giving", "event"] as const)
+    if (query[key]) filter[key] = query[key];
+  if (query.from || query.to) filter.createdAt = {...(query.from ? {$gte: new Date(query.from)} : {}), ...(query.to ? {$lte: new Date(query.to)} : {})};
+  if (query.search) {
+    const regex = {$regex: escapeRegex(query.search), $options: "i"};
+    filter.$or = [{donationNumber: regex}, {donorName: regex}, {donorEmail: regex}];
+  }
+  return filter;
 }

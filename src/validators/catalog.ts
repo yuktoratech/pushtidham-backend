@@ -12,7 +12,7 @@ const catalogImage = z
 export const givingBody = z
   .object({
     title: z.string().trim().min(1).max(160),
-    slug,
+    slug: slug.optional(),
     description: z.string().max(10000).default(""),
     image: catalogImage,
     amountType: z.enum(["fixed", "custom", "fixed_and_custom"]),
@@ -32,7 +32,7 @@ export const givingBody = z
 export const eventBody = z
   .object({
     title: z.string().trim().min(1).max(160),
-    slug,
+    slug: slug.optional(),
     shortDescription: z.string().max(500).default(""),
     description: z.string().max(20000).default(""),
     startsAt: z.iso.datetime({ offset: true }).transform((v) => new Date(v)),

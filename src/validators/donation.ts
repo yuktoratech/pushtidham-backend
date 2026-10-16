@@ -62,6 +62,9 @@ export const donationQuery = z
     path: ["to"],
     message: "Invalid date range",
   });
+export const donationExportQuery = donationQuery.safeExtend({
+  provider: z.enum(["stripe", "paypal", "offline", "legacy_paypal", "legacy_bank_transfer"]).optional(),
+});
 export const statusBody = z
   .object({
     status: z.enum(["completed", "rejected"]),
@@ -74,8 +77,10 @@ export const financialReportQuery = z.object({
   provider: z.enum(["stripe","paypal","offline","legacy_paypal","legacy_bank_transfer"]).optional(),
   paymentMethod: z.enum(paymentMethods).optional(),
   type: z.enum(donationTypes).optional(),
+  status: z.enum(statuses).optional(),
 }).strict().refine((v)=>!v.from||!v.to||new Date(v.from)<=new Date(v.to),{path:["to"],message:"Invalid date range"});
 export type DonationInput =
   z.infer<typeof onlineBody> | z.infer<typeof offlineBody>;
 export type DonationQuery = z.infer<typeof donationQuery>;
+export type DonationExportQuery = z.infer<typeof donationExportQuery>;
 export type FinancialReportQuery = z.infer<typeof financialReportQuery>;
