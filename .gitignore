@@ -21,6 +21,7 @@ coverage/
 .cache/
 .npm/
 .tmp/
+.local-migrations/
 tmp/
 .mongodb/
 .mongodb-binaries/

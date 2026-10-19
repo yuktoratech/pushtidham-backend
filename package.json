@@ -7,6 +7,9 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "catalog:plan": "tsx scripts/plan-client-catalog.ts",
+    "catalog:apply": "tsx scripts/migrate-client-catalog.ts apply",
+    "catalog:rollback": "tsx scripts/migrate-client-catalog.ts rollback",
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
@@ -33,6 +36,7 @@
     "jsonwebtoken": "9.0.3",
     "mongoose": "9.11.0",
     "multer": "^2.4.0",
+    "nodemailer": "^10.1.6",
     "pdf-lib": "1.17.1",
     "sharp": "^0.35.5",
     "stripe": "23.0.0",
@@ -47,6 +51,7 @@
     "@types/jsonwebtoken": "9.0.10",
     "@types/multer": "^2.3.0",
     "@types/node": "22.20.5",
+    "@types/nodemailer": "^8.0.2",
     "@types/supertest": "7.2.1",
     "eslint": "10.12.0",
     "mongodb-memory-server": "11.3.0",

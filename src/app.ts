@@ -16,7 +16,7 @@ import {
   createImageStorage,
   type ImageStorage,
 } from "./services/image-storage.js";
-import {ResendMailSender, type MailSender} from "./services/mail.js";
+import {hasSmtpConfig, SmtpMailSender, type MailSender} from "./services/mail.js";
 export function createApp(
   config: Config,
   dependencies: {
@@ -86,7 +86,7 @@ export function createApp(
       : undefined);
   const paypal = dependencies.paypal ?? (config.PAYPAL_ENABLED ? new PayPalHttpGateway(config) : undefined);
   const images = dependencies.images ?? createImageStorage(config);
-  const mail = dependencies.mail ?? (config.RESEND_API_KEY ? new ResendMailSender(config) : undefined);
+  const mail = dependencies.mail ?? (hasSmtpConfig(config) ? new SmtpMailSender(config) : undefined);
   app.use("/api/v1", routes(config, { stripe, paypal, images, mail }));
   app.use((_req, _res, next) =>
     next(new AppError(404, "NOT_FOUND", "Route not found")),

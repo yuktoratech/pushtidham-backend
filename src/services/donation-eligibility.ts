@@ -3,6 +3,7 @@ import { Event } from "../models/event.js";
 import { Giving } from "../models/giving.js";
 import { User } from "../models/user.js";
 import { AppError, missing } from "../utils/errors.js";
+import {festivalGroups} from "../content/client-catalog.js";
 
 export type DonationDesignation = {
   type: "general" | "event";
@@ -15,8 +16,8 @@ export async function resolveDonationDesignation(
   input: DonationDesignation,
   offline = false,
 ) {
-  if (input.type === "general") {
-    if (!input.giving || input.event)
+  if (input.giving) {
+    if (input.event)
       throw new AppError(400, "INVALID_DESIGNATION", "General requires only Giving");
     const giving = await Giving.findOne({
       _id: input.giving,
@@ -24,6 +25,9 @@ export async function resolveDonationDesignation(
       status: "active",
     });
     if (!giving) missing("Active Giving");
+    const utsav = giving.category === "utsav";
+    if ((input.type === "event") !== utsav) throw new AppError(400, "INVALID_DESIGNATION", "Utsav options require Event; other Giving requires General");
+    if (utsav && (giving.amountType !== "fixed" || giving.fixedAmountsCents.length !== 1)) throw new AppError(400, "INVALID_DESIGNATION", "Festival option must have one configured fixed amount");
     if (
       giving.amountType === "fixed" &&
       !giving.fixedAmountsCents.includes(input.amountCents)
@@ -33,9 +37,11 @@ export async function resolveDonationDesignation(
         "INVALID_AMOUNT",
         "Amount must match a configured fixed amount",
       );
-    return { title: giving.title, giving };
+    const festivalTitle = utsav ? festivalGroups[giving.festivalGroup as keyof typeof festivalGroups] : undefined;
+    if (utsav && !festivalTitle) throw new AppError(400, "INVALID_DESIGNATION", "Festival configuration is invalid");
+    return { title: festivalTitle ? `${festivalTitle} — ${giving.title}` : giving.title, giving, festivalTitle, donationOptionTitle: festivalTitle ? giving.title : undefined };
   }
-  if (!input.event || input.giving)
+  if (input.type !== "event" || !input.event || input.giving)
     throw new AppError(400, "INVALID_DESIGNATION", "Event requires only Event");
   const event = await Event.findOne({
     _id: input.event,

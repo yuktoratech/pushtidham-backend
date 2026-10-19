@@ -7,7 +7,7 @@ import { User } from "../models/user.js";
 import { Session } from "../models/session.js";
 import { AppError } from "../utils/errors.js";
 import { BCRYPT_COST } from "../constants/domain.js";
-import type {MailSender} from "./mail.js";
+import {escapeHtml, type MailSender} from "./mail.js";
 export const safeUser = (user: {
   _id: unknown;
   name: string;
@@ -204,9 +204,13 @@ export class AuthService {
     };
   }
   async updateProfile(userId: string, input: {name: string; email: string; phone: string}) {
+    const current = await User.findOne({_id: userId, role: "donor", status: "active"});
+    if (!current) throw denied();
+    if (input.email.toLowerCase() !== current.email.toLowerCase())
+      throw new AppError(400, "EMAIL_CHANGE_NOT_ALLOWED", "Your account email address cannot be changed.");
     const user = await User.findOneAndUpdate(
-      {_id: userId, role: "donor", status: "active"},
-      {$set: {name: input.name, email: input.email, phone: input.phone}},
+      {_id: userId, role: "donor", status: "active", email: current.email},
+      {$set: {name: input.name, phone: input.phone}},
       {new: true, runValidators: true},
     );
     if (!user) throw denied();
@@ -232,7 +236,12 @@ export class AuthService {
     await User.updateOne({_id: user._id}, {$set: {resetTokenHash, resetExpiresAt: new Date(Date.now() + 30 * 60_000)}});
     const url = new URL("/reset-password", frontendUrl);
     url.searchParams.set("token", token);
-    await mail.send({to: user.email, subject: "Pushtidham password reset", text: `A password reset was requested for your account. This link expires in 30 minutes:\n${url.href}\n\nIf you did not request this, you can ignore this email.`});
+    await mail.send({
+      to: user.email,
+      subject: "Pushtidham password reset",
+      text: `A password reset was requested for your account. This link expires in 30 minutes:\n${url.href}\n\nIf you did not request this, you can ignore this email.`,
+      html: `<p>A password reset was requested for your account.</p><p><a href="${escapeHtml(url.href)}">Reset your password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`,
+    });
   }
   async resetPassword(token: string, newPassword: string) {
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);

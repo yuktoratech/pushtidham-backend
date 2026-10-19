@@ -17,6 +17,8 @@ const schema = new Schema(
     giving: { type: Schema.Types.ObjectId, ref: "Giving" },
     event: { type: Schema.Types.ObjectId, ref: "Event" },
     designationTitle: { type: String, required: true },
+    festivalTitle: String,
+    donationOptionTitle: String,
     amountCents: {
       type: Number,
       required: true,
@@ -56,7 +58,7 @@ schema.pre("validate", function () {
   if (
     this.type === "general"
       ? !this.giving || !!this.event
-      : !this.event || !!this.giving
+      : Boolean(this.event) === Boolean(this.giving)
   )
     this.invalidate("type", "Exactly one matching designation required");
   if ((this.source === "offline") !== (this.paymentMethod === "offline"))

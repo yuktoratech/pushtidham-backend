@@ -11,7 +11,7 @@ import {
 import { donationViews } from "./donation-views.js";
 export class DonationService {
   async create(input: DonationInput, actor?: Types.ObjectId, offline = false) {
-    const { title } = await resolveDonationDesignation(input, offline);
+    const { title, festivalTitle, donationOptionTitle } = await resolveDonationDesignation(input, offline);
     const user =
       offline && "user" in input && input.user
         ? new Types.ObjectId(input.user)
@@ -30,6 +30,8 @@ export class DonationService {
       giving: input.giving,
       event: input.event,
       designationTitle: title,
+      festivalTitle,
+      donationOptionTitle,
       amountCents: input.amountCents,
       currency: "USD" as const,
       paymentMethod: offline

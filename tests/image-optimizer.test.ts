@@ -109,7 +109,7 @@ test("corrupt images are rejected with a sanitized error", async () => {
       typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      error.code === "INVALID_IMAGE",
+      error.code === "IMAGE_DECODE_FAILED",
   );
 });
 

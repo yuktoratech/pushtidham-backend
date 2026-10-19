@@ -93,6 +93,8 @@ export class CatalogService {
     return this.createWithSlug("giving", input.title, input.slug, slug => Giving.create({
       title: input.title,
       slug,
+      category: input.category ?? "general",
+      festivalGroup: input.festivalGroup ?? "",
       description: input.description,
       image: input.image,
       amountType: input.amountType,
@@ -122,6 +124,8 @@ export class CatalogService {
     doc.set({
       title: input.title,
       slug: input.slug ?? doc.slug,
+      category: input.category ?? doc.category,
+      festivalGroup: input.festivalGroup ?? doc.festivalGroup,
       description: input.description,
       image: input.image,
       amountType: input.amountType,

@@ -35,7 +35,7 @@ function expectedDimensions(width: number, height: number) {
 
 function input(bytes: Buffer) {
   return sharp(bytes, {
-    failOn: "error",
+    failOn: "warning",
     limitInputPixels: MAX_INPUT_PIXELS,
     sequentialRead: true,
   });
@@ -61,10 +61,13 @@ async function encode(bytes: Buffer, lossless = false) {
 
 export async function optimizeImage(
   bytes: Buffer,
-  _image: SupportedImage,
+  image: SupportedImage,
 ): Promise<OptimizedImage> {
   try {
     const metadata = await input(bytes).metadata();
+    const decodedTypes: Record<string, string> = {jpeg: "image/jpeg", png: "image/png", webp: "image/webp"};
+    const decodedType = decodedTypes[metadata.format ?? ""];
+    if (!decodedType || decodedType !== image.contentType) throw invalid();
     if (!metadata.width || !metadata.height) throw invalid();
     if (
       metadata.width > MAX_INPUT_DIMENSION ||
@@ -119,6 +122,6 @@ export async function optimizeImage(
     if (error instanceof AppError) throw error;
     if (error instanceof Error && /pixel limit|memory|timeout/i.test(error.message))
       throw tooComplex();
-    throw invalid();
+    throw new AppError(415, "IMAGE_DECODE_FAILED", "This image could not be decoded. It may be damaged or use an unsupported encoding. Please export it as JPG, PNG, or WebP and try again.");
   }
 }

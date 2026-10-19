@@ -11,6 +11,7 @@ const boolean = z
   .transform((value) => value === "true");
 const optionalUrl = z.union([z.literal(""), z.url()]).optional().transform((v) => v || undefined);
 const optionalSecret = z.union([z.literal(""), z.string().min(16)]).optional().transform((v) => v || undefined);
+const optionalPassword = z.union([z.literal(""), z.string().min(8)]).optional().transform((v) => v || undefined);
 const optionalString = z
   .union([z.literal(""), z.string().trim().min(1)])
   .optional()
@@ -45,9 +46,14 @@ const schema = z
     ADMIN_SEED_NAME: z.string().optional(),
     ADMIN_SEED_EMAIL: z.string().optional(),
     ADMIN_SEED_PASSWORD: z.string().optional(),
-    RESEND_API_KEY: optionalSecret,
-    MAIL_FROM: optionalString,
-    CONTACT_TO: optionalString,
+    MAIL_PROVIDER: z.union([z.literal(""), z.literal("smtp")]).optional().transform((v) => v || undefined),
+    SMTP_HOST: optionalString,
+    SMTP_PORT: z.union([z.literal(""), z.coerce.number().pipe(z.union([z.literal(465), z.literal(587)]))]).optional().transform((v) => v || undefined),
+    SMTP_SECURE: z.union([z.literal(""), z.enum(["true", "false"])]).optional().transform((v) => !v ? undefined : v === "true"),
+    SMTP_USER: optionalString,
+    SMTP_PASSWORD: optionalPassword,
+    MAIL_FROM: z.union([z.literal(""), z.email()]).optional().transform((v) => v || undefined),
+    CONTACT_TO: z.union([z.literal(""), z.email()]).optional().transform((v) => v || undefined),
     R2_ACCOUNT_ID: optionalString,
     R2_ACCESS_KEY_ID: optionalString,
     R2_SECRET_ACCESS_KEY: optionalString,
@@ -66,8 +72,8 @@ const schema = z
       .number()
       .int()
       .min(1)
-      .max(8 * 1024 * 1024)
-      .default(8 * 1024 * 1024),
+      .max(15 * 1024 * 1024)
+      .default(15 * 1024 * 1024),
     STRIPE_SECRET_KEY: optionalSecret,
     STRIPE_WEBHOOK_SECRET: optionalSecret,
     STRIPE_API_VERSION: z.literal("2026-09-30.endive").default("2026-09-30.endive"),
@@ -137,8 +143,22 @@ const schema = z
         path: ["COOKIE_SAME_SITE"],
         message: "Cross-site cookies require production HTTPS",
       });
-    if (v.RESEND_API_KEY && (!v.MAIL_FROM || !v.CONTACT_TO))
-      c.addIssue({code: "custom", path: ["MAIL_FROM"], message: "MAIL_FROM and CONTACT_TO are required for email"});
+    const smtpKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM", "CONTACT_TO"] as const;
+    const transportKeys = ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASSWORD"] as const;
+    const smtpStarted = v.MAIL_PROVIDER !== undefined || transportKeys.some((key) => v[key] !== undefined);
+    if (smtpStarted && v.MAIL_PROVIDER !== "smtp")
+      c.addIssue({code: "custom", path: ["MAIL_PROVIDER"], message: "Use smtp when email configuration is present"});
+    if (v.MAIL_PROVIDER === "smtp") {
+      for (const key of smtpKeys)
+        if (v[key] === undefined)
+          c.addIssue({code: "custom", path: [key], message: "Required when MAIL_PROVIDER=smtp"});
+      if (v.SMTP_PORT === 465 && v.SMTP_SECURE !== true)
+        c.addIssue({code: "custom", path: ["SMTP_SECURE"], message: "Port 465 requires implicit TLS"});
+      if (v.SMTP_PORT === 587 && v.SMTP_SECURE !== false)
+        c.addIssue({code: "custom", path: ["SMTP_SECURE"], message: "Port 587 requires STARTTLS mode"});
+      if (v.SMTP_HOST && (/[:/\s]/.test(v.SMTP_HOST) || v.SMTP_HOST.length > 253))
+        c.addIssue({code: "custom", path: ["SMTP_HOST"], message: "Use an SMTP hostname without a URL or port"});
+    }
     const storageKeys = [
       "R2_ACCOUNT_ID",
       "R2_ENDPOINT",

@@ -985,19 +985,24 @@ test("donor profile persists, protected fields stay protected, and password chan
   assert.equal(relogin.body.data.user.phone, "+1 352 555 0199");
 });
 test("contact and reset emails use an injected adapter and never claim unaccepted delivery", async () => {
-  const sent: Array<{to: string; subject: string; text: string}> = [];
-  const mail = {send: async (message: {to: string; subject: string; text: string}) => {sent.push(message);}};
+  const sent: Array<{to: string; subject: string; text: string; html?: string; replyTo?: string}> = [];
+  const mail = {send: async (message: {to: string; subject: string; text: string; html?: string; replyTo?: string}) => {sent.push(message);}};
   const mailApp = createApp(loadConfig({...env, CONTACT_TO: "temple@example.test"}), {mail});
   const address = `mail-${randomBytes(5).toString("hex")}@example.test`;
   assert.equal((await request(mailApp).post("/api/v1/contact").set("Origin", config.FRONTEND_URL).send({name: "Donor", email: address, subject: "Visit", message: "Please advise"})).status, 202);
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.to, "temple@example.test");
+  assert.equal(sent[0]!.replyTo, address);
+  assert.match(sent[0]!.html ?? "", /Please advise/);
   assert.equal((await request(mailApp).post("/api/v1/contact").set("Origin", "http://localhost:3001").send({name: "Donor", email: address, subject: "Visit", message: "Please advise"})).status, 403);
   assert.equal((await request(app).post("/api/v1/contact").set("Origin", config.FRONTEND_URL).send({name: "Donor", email: address, subject: "Visit", message: "Please advise"})).status, 503);
+  assert.equal((await request(mailApp).post("/api/v1/auth/forgot-password").send({email: `missing-${address}`})).status, 202);
+  assert.equal(sent.length, 1);
   await request(app).post("/api/v1/auth/register").send({name: "Reset Donor", email: address, password: "eight123"});
   const forgot = await request(mailApp).post("/api/v1/auth/forgot-password").send({email: address});
   assert.equal(forgot.status, 202);
   assert.equal(sent.length, 2);
+  assert.match(sent[1]!.html ?? "", /Reset your password/);
   const url = sent[1]!.text.match(/https?:\/\/\S+/)?.[0];
   assert.ok(url);
   const resetToken = new URL(url).searchParams.get("token");

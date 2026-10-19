@@ -39,45 +39,11 @@ function isPng(bytes: Buffer) {
   return hasEnd && offset === bytes.length;
 }
 
-const jpegStartOfFrame = new Set([
-  0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce,
-  0xcf,
-]);
-
 function isJpeg(bytes: Buffer) {
-  if (
-    bytes.length < 11 ||
-    bytes[0] !== 0xff ||
-    bytes[1] !== 0xd8 ||
-    bytes.at(-2) !== 0xff ||
-    bytes.at(-1) !== 0xd9
-  )
-    return false;
-  let offset = 2;
-  let hasFrame = false;
-  while (offset < bytes.length - 2) {
-    if (bytes[offset] !== 0xff) return false;
-    while (bytes[offset] === 0xff) offset++;
-    const marker = bytes[offset++];
-    if (marker === undefined || marker === 0x00) return false;
-    if (marker === 0xd9) return hasFrame && offset === bytes.length;
-    if (marker === 0xda) return hasFrame;
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-    if (offset + 2 > bytes.length) return false;
-    const length = bytes.readUInt16BE(offset);
-    if (length < 2 || offset + length > bytes.length) return false;
-    if (jpegStartOfFrame.has(marker)) {
-      if (
-        length < 8 ||
-        bytes.readUInt16BE(offset + 3) === 0 ||
-        bytes.readUInt16BE(offset + 5) === 0
-      )
-        return false;
-      hasFrame = true;
-    }
-    offset += length;
-  }
-  return false;
+  // Sniff JPEG's SOI and marker prefix, not its container layout/end position.
+  // Exporters may append padding. Sharp verifies format and fully decodes the
+  // stream with strict corruption checks before any optimized bytes reach R2.
+  return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
 function validWebpPayload(type: string, bytes: Buffer, offset: number, length: number) {

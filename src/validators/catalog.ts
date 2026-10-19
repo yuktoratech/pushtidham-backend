@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { slug, money, paging } from "./common.js";
+import {festivalKeys} from "../content/client-catalog.js";
 const catalogImage = z
   .string()
   .trim()
@@ -12,6 +13,8 @@ const catalogImage = z
 export const givingBody = z
   .object({
     title: z.string().trim().min(1).max(160),
+    category: z.enum(["general", "daily_seva", "utsav"]).optional(),
+    festivalGroup: z.enum(["", ...festivalKeys]).optional(),
     slug: slug.optional(),
     description: z.string().max(10000).default(""),
     image: catalogImage,
@@ -28,6 +31,9 @@ export const givingBody = z
   .refine((v) => v.amountType === "custom" || v.fixedAmountsCents.length > 0, {
     path: ["fixedAmountsCents"],
     message: "Fixed amounts required",
+  }).superRefine((v, ctx) => {
+    if (v.category === "utsav" && (!v.festivalGroup || v.amountType !== "fixed" || v.fixedAmountsCents.length !== 1)) ctx.addIssue({code: "custom", path: ["festivalGroup"], message: "Choose a festival and one fixed amount for Utsav"});
+    if (v.category && v.category !== "utsav" && v.festivalGroup) ctx.addIssue({code: "custom", path: ["festivalGroup"], message: "Festival group is only for Utsav"});
   });
 export const eventBody = z
   .object({

@@ -12,7 +12,7 @@ import { catalogController } from "../controllers/catalog.js";
 import { donationController } from "../controllers/donations.js";
 import { register, login, empty, profile, changePassword, forgotPassword, resetPassword } from "../validators/auth.js";
 import {contactBody} from "../validators/contact.js";
-import type {MailSender} from "../services/mail.js";
+import {escapeHtml, type MailSender} from "../services/mail.js";
 import {AppError} from "../utils/errors.js";
 import { idParams, slugParams, listQuery } from "../validators/common.js";
 import {
@@ -90,6 +90,8 @@ export function routes(
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 20,
+    // Admin and donor share this login route. All other auth routes remain limited.
+    skip: (req) => config.NODE_ENV === "development" && req.path === "/auth/login",
     standardHeaders: "draft-8",
     legacyHeaders: false,
     message: {
@@ -124,7 +126,13 @@ export function routes(
   router.post("/contact", contactLimiter, a.trusted, validate({body: contactBody}), async (req, res) => {
     if (!dependencies.mail || !config.CONTACT_TO) throw new AppError(503, "MAIL_UNAVAILABLE", "Online contact delivery is unavailable");
     const body = req.validated.body as {name: string; email: string; phone: string; subject: string; message: string};
-    await dependencies.mail.send({to: config.CONTACT_TO, replyTo: body.email, subject: `Website enquiry: ${body.subject}`, text: `From: ${body.name}\nEmail: ${body.email}\nPhone: ${body.phone || "Not provided"}\n\n${body.message}`});
+    await dependencies.mail.send({
+      to: config.CONTACT_TO,
+      replyTo: body.email,
+      subject: `Website enquiry: ${body.subject}`,
+      text: `From: ${body.name}\nEmail: ${body.email}\nPhone: ${body.phone || "Not provided"}\n\n${body.message}`,
+      html: `<p><strong>From:</strong> ${escapeHtml(body.name)}</p><p><strong>Email:</strong> ${escapeHtml(body.email)}</p><p><strong>Phone:</strong> ${escapeHtml(body.phone || "Not provided")}</p><p>${escapeHtml(body.message).replaceAll("\n", "<br>")}</p>`,
+    });
     res.status(202).json({success: true, data: null});
   });
   router.post("/webhooks/stripe", stripe.webhook);

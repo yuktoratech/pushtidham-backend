@@ -16,7 +16,7 @@ const fields = {
   currency: z.literal("USD").default("USD"),
 };
 const references = (v: { type: string; giving?: string; event?: string }) =>
-  v.type === "general" ? !!v.giving && !v.event : !!v.event && !v.giving;
+  v.type === "general" ? !!v.giving && !v.event : Boolean(v.event) !== Boolean(v.giving);
 export const onlineBody = z
   .object({
     ...fields,
@@ -26,7 +26,7 @@ export const onlineBody = z
   .strict()
   .refine(references, {
     path: ["type"],
-    message: "General requires only Giving; Event requires only Event",
+    message: "General requires Giving; Event requires exactly one scheduled Event or Utsav option",
   })
   .refine((v) => v.paymentMethod === "bank_transfer" || !v.bankReference, {
     path: ["bankReference"],
@@ -43,7 +43,7 @@ export const offlineBody = z
   .strict()
   .refine(references, {
     path: ["type"],
-    message: "General requires only Giving; Event requires only Event",
+    message: "General requires Giving; Event requires exactly one scheduled Event or Utsav option",
   });
 export const donationQuery = z
   .object({

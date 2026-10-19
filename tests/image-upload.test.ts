@@ -31,7 +31,7 @@ const env = {
   FRONTEND_URL: "http://localhost:3000",
   JWT_ACCESS_EXPIRES_IN: "15m",
   JWT_REFRESH_EXPIRES_IN: "7d",
-  PRODUCT_IMAGE_MAX_BYTES: String(8 * 1024 * 1024),
+  PRODUCT_IMAGE_MAX_BYTES: String(15 * 1024 * 1024),
 };
 const config = loadConfig(env);
 
@@ -115,11 +115,18 @@ test("valid JPEG, PNG and WebP uploads are optimized to WebP before storage", as
   const fixtures = [
     [png(), "image/png", "png"],
     [jpeg(), "image/jpeg", "jpg"],
+    [jpeg(), "image/jpeg", "jpeg"],
+    [Buffer.concat([jpeg(), Buffer.alloc(16)]), "image/jpeg", "jpg"],
+    [Buffer.concat([jpeg(), Buffer.from(" \r\n")]), "image/jpeg", "jpg"],
+    [await sharp(jpeg()).withExif({IFD0: {Artist: "Fixture"}}).withMetadata({orientation: 6}).jpeg().toBuffer(), "image/jpeg", "jpeg"],
+    [await sharp(jpeg()).jpeg({progressive: true}).toBuffer(), "image/jpeg", "jpg"],
+    [await sharp(jpeg()).toColourspace("cmyk").jpeg().toBuffer(), "image/jpeg", "jpeg"],
     [webp(), "image/webp", "webp"],
   ] as const;
+  for (const kind of ["giving", "events"] as const) {
   for (const [bytes, contentType, extension] of fixtures) {
     const response = await request(app)
-      .post("/api/v1/admin/uploads/events")
+      .post(`/api/v1/admin/uploads/${kind}`)
       .set(bearer(adminToken))
       .attach("image", bytes, { filename: `image.${extension}`, contentType });
     assert.equal(response.status, 201, JSON.stringify(response.body));
@@ -130,7 +137,66 @@ test("valid JPEG, PNG and WebP uploads are optimized to WebP before storage", as
     assert.equal(stored.image.extension, "webp");
     assert.equal((await sharp(stored.bytes).metadata()).format, "webp");
   }
+  }
 });
+test("a genuine high-detail 10–15 MiB JPEG is decoded and optimized on both upload routes", async () => {
+  const bytes = await sharp(randomBytes(3000 * 3000 * 3), {raw: {width: 3000, height: 3000, channels: 3}})
+    .jpeg({quality: 100, chromaSubsampling: "4:2:0"}).toBuffer();
+  assert.ok(bytes.length > 10 * 1024 * 1024 && bytes.length < 15 * 1024 * 1024, `Fixture size: ${bytes.length}`);
+  for (const kind of ["giving", "events"] as const) {
+    const response = await request(app).post(`/api/v1/admin/uploads/${kind}`).set(bearer(adminToken))
+      .attach("image", bytes, {filename: "large-photo.jpg", contentType: "image/jpeg"});
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const stored = mock.uploads.at(-1)!;
+    const metadata = await sharp(stored.bytes).metadata();
+    assert.equal(metadata.format, "webp");
+    assert.equal(metadata.width, 1600);
+    assert.equal(metadata.height, 1600);
+    assert.ok(stored.bytes.length < bytes.length);
+  }
+  console.log("Large JPEG regression input bytes:", bytes.length);
+});
+
+test("corrupt/truncated JPEG and unsupported images never reach storage", async () => {
+  for (const kind of ["giving", "events"] as const) {
+    for (const bytes of [Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16]), jpeg().subarray(0, jpeg().length - 30)]) {
+      const count = mock.uploads.length;
+      const response = await request(app).post(`/api/v1/admin/uploads/${kind}`).set(bearer(adminToken))
+        .attach("image", bytes, {filename: "corrupt.jpg", contentType: "image/jpeg"});
+      assert.equal(response.status, 415);
+      assert.equal(response.body.error.code, "IMAGE_DECODE_FAILED");
+      assert.equal(mock.uploads.length, count);
+    }
+    const response = await request(app).post(`/api/v1/admin/uploads/${kind}`).set(bearer(adminToken))
+      .attach("image", Buffer.from("GIF89a"), {filename: "unsupported.gif", contentType: "image/gif"});
+    assert.equal(response.status, 415);
+    assert.equal(response.body.error.code, "INVALID_IMAGE");
+  }
+});
+test("both upload routes accept valid images below and exactly 15 MiB and reject one byte above", async () => {
+  const limit = 15 * 1024 * 1024;
+  for (const kind of ["giving", "events"] as const) {
+    for (const size of [limit - 1, limit]) {
+      // A valid JPEG stream with legal zero padding exercises exact byte limits
+      // while keeping decoded dimensions small and processing deterministic.
+      const bytes = Buffer.alloc(size);
+      jpeg().copy(bytes);
+      const response = await request(app).post(`/api/v1/admin/uploads/${kind}`)
+        .set(bearer(adminToken)).attach("image", bytes, {filename: "boundary.jpg", contentType: "image/jpeg"});
+      assert.equal(response.status, 201, JSON.stringify(response.body));
+      assert.equal(response.body.data.contentType, "image/webp");
+      assert.match(response.body.data.url, /\.webp$/);
+    }
+    const uploadsBefore = mock.uploads.length;
+    const response = await request(app).post(`/api/v1/admin/uploads/${kind}`)
+      .set(bearer(adminToken)).attach("image", Buffer.alloc(limit + 1), {filename: "oversized.jpg", contentType: "image/jpeg"});
+    assert.equal(response.status, 413);
+    assert.equal(response.body.error.code, "IMAGE_TOO_LARGE");
+    assert.match(response.body.error.message, /15 MiB/);
+    assert.equal(mock.uploads.length, uploadsBefore);
+  }
+});
+
 test("an uploaded image can be saved with a new Giving record and an automatic slug", async () => {
   const uploaded = await request(app).post("/api/v1/admin/uploads/giving").set({Authorization: `Bearer ${adminToken}`}).attach("image", png(), {filename: "giving.png", contentType: "image/png"});
   assert.equal(uploaded.status, 201);
@@ -165,7 +231,7 @@ test("spoofed, malformed and oversized images are rejected before storage", asyn
   const oversized = await request(app)
     .post("/api/v1/admin/uploads/giving")
     .set(bearer(adminToken))
-    .attach("image", Buffer.alloc(8 * 1024 * 1024 + 1), {
+    .attach("image", Buffer.alloc(15 * 1024 * 1024 + 1), {
       filename: "large.png",
       contentType: "image/png",
     });
