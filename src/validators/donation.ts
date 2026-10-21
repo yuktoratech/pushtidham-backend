@@ -10,6 +10,7 @@ const fields = {
   donorEmail: email,
   donorPhone: z.string().trim().max(40).optional(),
   type: z.enum(donationTypes),
+  categoryId: id.optional(),
   giving: id.optional(),
   event: id.optional(),
   amountCents: money,

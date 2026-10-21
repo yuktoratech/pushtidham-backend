@@ -463,8 +463,8 @@ test("donations require matching references, server-owned fixed amounts and boun
       event: eventId,
       amountCents: 1234,
     });
-  assert.equal(event.status, 201);
-  assert.equal(event.body.data.user, undefined);
+  assert.equal(event.status, 409);
+  assert.equal(event.body.error.code, "EVENT_DONATIONS_DISABLED");
   assert.equal(
     (
       await request(app)
@@ -640,7 +640,7 @@ test("custom and combined modes, lifecycle eligibility, filtering and literal se
           event: eventId,
         })
     ).status,
-    404,
+    409,
   );
   await request(app)
     .patch("/api/v1/admin/events/" + eventId + "/status")
@@ -866,7 +866,7 @@ test("health reports database unavailability using the standard error envelope",
   }
 });
 
-test("public Event eligibility uses published status; offline historical Events only need to exist", async () => {
+test("public Events reject new donations; offline historical Events only need to exist", async () => {
   const past = new Date("2020-01-01T00:00:00Z");
   const published = await Event.create({
     title: "Published historical event",
@@ -899,7 +899,7 @@ test("public Event eligibility uses published status; offline historical Events 
         .post("/api/v1/donations")
         .send({ ...input, paymentMethod: "paypal" })
     ).status,
-    201,
+    409,
   );
   assert.equal(
     (
@@ -911,7 +911,7 @@ test("public Event eligibility uses published status; offline historical Events 
           paymentMethod: "paypal",
         })
     ).status,
-    404,
+    409,
   );
   assert.equal(
     (

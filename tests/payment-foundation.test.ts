@@ -139,7 +139,7 @@ test("historical donations remain readable without payment foundation fields", a
   assert.equal(historical?.feeContributionCents, undefined);
 });
 
-test("eligibility preserves fixed/custom/combined Giving and published Event rules", async () => {
+test("eligibility preserves Giving amounts and offline Event history; public Events are information only", async () => {
   const fixed = await designation("fixed");
   await assert.rejects(
     resolveDonationDesignation({
@@ -175,7 +175,7 @@ test("eligibility preserves fixed/custom/combined Giving and published Event rul
         type: "event",
         event: String(published._id),
         amountCents: 100,
-      })
+      }, true)
     ).title,
     "Past but published",
   );

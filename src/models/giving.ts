@@ -4,6 +4,7 @@ import {festivalKeys} from "../content/client-catalog.js";
 const schema = new Schema(
   {
     title: { type: String, required: true },
+    categoryId: { type: Schema.Types.ObjectId, ref: "GivingCategory" },
     category: {type: String, enum: ["general", "daily_seva", "utsav"], default: "general"},
     festivalGroup: {type: String, enum: ["", ...festivalKeys], default: ""},
     slug: { type: String, required: true, lowercase: true, trim: true },
@@ -42,4 +43,5 @@ schema.pre("validate", function () {
 });
 schema.index({ slug: 1 }, { unique: true });
 schema.index({ status: 1, deletedAt: 1, displayOrder: 1, _id: 1 });
+schema.index({ categoryId: 1, status: 1, deletedAt: 1, displayOrder: 1, _id: 1 });
 export const Giving = model("Giving", schema);

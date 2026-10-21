@@ -5,7 +5,7 @@ import { email, id, money } from "./common.js";
 const references = (value: { type: string; giving?: string; event?: string }) =>
   value.type === "general"
     ? !!value.giving && !value.event
-    : !!value.event && !value.giving;
+    : Boolean(value.event) !== Boolean(value.giving);
 
 export const stripeCheckoutBody = z
   .object({
@@ -13,6 +13,7 @@ export const stripeCheckoutBody = z
     donorEmail: email,
     donorPhone: z.string().trim().max(40).optional(),
     type: z.enum(donationTypes),
+    categoryId: id.optional(),
     giving: id.optional(),
     event: id.optional(),
     amountCents: money,
@@ -32,7 +33,7 @@ export const paypalOrderBody = z
   .object({
     donorName: z.string().trim().min(1).max(120), donorEmail: email,
     donorPhone: z.string().trim().max(40).optional(), type: z.enum(donationTypes),
-    giving: id.optional(), event: id.optional(), amountCents: money,
+    categoryId: id.optional(), giving: id.optional(), event: id.optional(), amountCents: money,
     currency: z.literal("USD").default("USD"), coverFees: z.boolean().default(false),
   })
   .strict()

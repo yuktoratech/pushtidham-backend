@@ -1,4 +1,9 @@
 import { Schema, model } from "mongoose";
+const galleryEntry = new Schema({
+  url: {type: String, required: true, maxlength: 2000},
+  alt: {type: String, default: "", maxlength: 300},
+  displayOrder: {type: Number, min: 0, max: 1000, required: true, validate: Number.isInteger},
+}, {_id: false});
 const schema = new Schema(
   {
     title: { type: String, required: true },
@@ -9,6 +14,7 @@ const schema = new Schema(
     endsAt: Date,
     location: { type: String, required: true },
     image: { type: String, default: "" },
+    gallery: {type: [galleryEntry], default: []},
     status: {
       type: String,
       enum: ["draft", "published", "inactive"],

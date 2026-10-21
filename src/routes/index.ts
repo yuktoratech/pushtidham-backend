@@ -22,6 +22,7 @@ import {
   eventStatus,
   givingQuery,
   eventQuery,
+  imageUploadQuery,
 } from "../validators/catalog.js";
 import {
   onlineBody,
@@ -47,6 +48,8 @@ import {exportDonations} from "../services/donation-export.js";
 import { imageController } from "../controllers/images.js";
 import type { ImageStorage } from "../services/image-storage.js";
 import { imageDeleteBody, imageKindParams } from "../validators/catalog.js";
+import { givingCategoryBody, givingCategoryStatus, givingCategoryQuery, publicGivingQuery } from "../validators/catalog.js";
+import { givingCategoryController } from "../controllers/giving-categories.js";
 export function routes(
   config: Config,
   dependencies: {
@@ -80,6 +83,9 @@ export function routes(
   const paypalEvents = dependencies.paypal && config.PAYPAL_MERCHANT_ID ? new PayPalEventService(dependencies.paypal, config.PAYPAL_MERCHANT_ID) : undefined;
   const paypal = paypalController(config, dependencies.paypal, paypalOrders, paypalEvents);
   router.get("/health", health);
+  const publicCategories = givingCategoryController(catalog);
+  router.get("/giving-categories", validate({query: givingCategoryQuery}), publicCategories.list);
+  router.get("/giving-categories/:slug", validate({params: slugParams}), publicCategories.get);
   router.get(
     "/payments/capabilities",
     paymentCapabilitiesController(config, {
@@ -154,7 +160,7 @@ export function routes(
   for (const kind of ["giving", "event"] as const) {
     const path = kind === "giving" ? "giving" : "events";
     const c = catalogController(catalog, kind);
-    router.get("/" + path, validate({ query: listQuery }), c.list);
+    router.get("/" + path, validate({ query: kind === "giving" ? publicGivingQuery : listQuery }), c.list);
     router.get("/" + path + "/:slug", validate({ params: slugParams }), c.get);
     const ac = catalogController(catalog, kind, true);
     admin.get(
@@ -193,7 +199,7 @@ export function routes(
   admin.post(
     "/uploads/:kind",
     images.available,
-    validate({ params: imageKindParams }),
+    validate({ params: imageKindParams, query: imageUploadQuery }),
     images.parse,
     images.upload,
   );
@@ -242,5 +248,12 @@ export function routes(
     ad.status,
   );
   router.use("/admin", authenticate(auth), authorizeRoles("admin"), admin);
+  const adminCategories = givingCategoryController(catalog, true);
+  admin.get("/giving-categories", validate({query: givingCategoryQuery}), adminCategories.list);
+  admin.get("/giving-categories/:id", validate({params: idParams}), adminCategories.get);
+  admin.post("/giving-categories", validate({body: givingCategoryBody}), adminCategories.create);
+  admin.put("/giving-categories/:id", validate({params: idParams, body: givingCategoryBody}), adminCategories.replace);
+  admin.patch("/giving-categories/:id/status", validate({params: idParams, body: givingCategoryStatus}), adminCategories.status);
+  admin.delete("/giving-categories/:id", validate({params: idParams}), adminCategories.remove);
   return router;
 }
