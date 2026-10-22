@@ -3,7 +3,7 @@ import type Stripe from "stripe";
 import type { Config } from "../config/env.js";
 import type { StripeCheckoutInput } from "../validators/payments.js";
 import { AppError } from "../utils/errors.js";
-import { resolveDonationDesignation } from "./donation-eligibility.js";
+import { resolveDonationDesignation, validateDonationPurpose } from "./donation-eligibility.js";
 import type { FeePolicy } from "./payment-fees.js";
 import { PaymentService } from "./payments.js";
 import type { StripeGateway } from "./stripe-gateway.js";
@@ -63,6 +63,7 @@ export class StripeCheckoutService {
       throw new AppError(422, "PAYMENT_METHOD_UNAVAILABLE", "Selected Stripe payment method is unavailable");
 
     const designation = await resolveDonationDesignation(input);
+    const donationPurpose = validateDonationPurpose(input.donationPurpose, designation);
     const fingerprint = createHash("sha256")
       .update(
         JSON.stringify({
@@ -75,6 +76,7 @@ export class StripeCheckoutService {
           amountCents: input.amountCents,
           methodFamily: input.methodFamily,
           coverFees: input.coverFees,
+          ...(donationPurpose ? {donationPurpose} : {}),
         }),
       )
       .digest("hex");
@@ -86,6 +88,7 @@ export class StripeCheckoutService {
     const prepared = await this.payments.prepareNewStripeDonationAttempt({
       ...input,
       designationTitle: designation.title,
+      donationPurpose,
       idempotencyKey,
       requestFingerprint: fingerprint,
       feePolicy: feePolicy(this.config, input.methodFamily),

@@ -6,6 +6,7 @@ const schema = new Schema(
     phone: { type: String, default: "", maxlength: 30 },
     passwordHash: { type: String, required: true, select: false },
     role: { type: String, enum: ["donor", "admin"], default: "donor" },
+    canManageGivingCategories: { type: Boolean, default: false },
     status: { type: String, enum: ["active", "disabled"], default: "active" },
     passwordChangedAt: Date,
     resetTokenHash: { type: String, select: false },

@@ -45,6 +45,7 @@ export type PrepareNewDonationAttempt = {
   giving?: string;
   event?: string;
   designationTitle: string;
+  donationPurpose?: string;
   amountCents: number;
   methodFamily: "card" | "ach" | "paypal";
   idempotencyKey: string;
@@ -121,6 +122,7 @@ export class PaymentService {
               giving: input.giving,
               event: input.event,
               designationTitle: input.designationTitle,
+              donationPurpose: input.donationPurpose,
               amountCents: input.amountCents,
               currency: "USD",
               paymentMethod: input.methodFamily,

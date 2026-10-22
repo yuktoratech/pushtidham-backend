@@ -7,11 +7,14 @@ import { paginate, escapeRegex } from "../utils/pagination.js";
 import {
   requireActiveDonationUser,
   resolveDonationDesignation,
+  validateDonationPurpose,
 } from "./donation-eligibility.js";
 import { donationViews } from "./donation-views.js";
 export class DonationService {
   async create(input: DonationInput, actor?: Types.ObjectId, offline = false) {
-    const { title, festivalTitle, donationOptionTitle } = await resolveDonationDesignation(input, offline);
+    const designation = await resolveDonationDesignation(input, offline);
+    const { title, festivalTitle, donationOptionTitle } = designation;
+    const donationPurpose = validateDonationPurpose(input.donationPurpose, designation);
     const user =
       offline && "user" in input && input.user
         ? new Types.ObjectId(input.user)
@@ -30,6 +33,7 @@ export class DonationService {
       giving: input.giving,
       event: input.event,
       designationTitle: title,
+      donationPurpose,
       festivalTitle,
       donationOptionTitle,
       amountCents: input.amountCents,

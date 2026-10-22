@@ -33,7 +33,7 @@ const env = {
   FRONTEND_URL: "http://localhost:3000",
   JWT_ACCESS_EXPIRES_IN: "15m",
   JWT_REFRESH_EXPIRES_IN: "7d",
-  PRODUCT_IMAGE_MAX_BYTES: String(8 * 1024 * 1024),
+  PRODUCT_IMAGE_MAX_BYTES: String(15 * 1024 * 1024),
 };
 const config = loadConfig(env);
 
@@ -83,7 +83,7 @@ before(async () => {
   await Promise.all([User.init(), Session.init(), Giving.init()]);
   const passwordHash = await bcrypt.hash(password, 12);
   await User.create([
-    { name: "Image admin", email: "image-admin@example.test", passwordHash, role: "admin" },
+    { name: "Image admin", email: "image-admin@example.test", passwordHash, role: "admin", canManageGivingCategories: true },
     { name: "Image donor", email: "image-donor@example.test", passwordHash, role: "donor" },
   ]);
   const [admin, donor] = await Promise.all([
@@ -111,6 +111,16 @@ test("image upload requires an authenticated admin", async () => {
     .set(bearer(donorToken))
     .attach("image", png(), { filename: "image.png", contentType: "image/png" });
   assert.equal(donor.status, 403);
+});
+
+test("normal admin cannot upload category artwork", async () => {
+  const passwordHash = await bcrypt.hash(password, 12);
+  await User.create({name:"Catalog admin",email:"catalog-admin@example.test",passwordHash,role:"admin"});
+  const login = await request(app).post("/api/v1/auth/login").send({email:"catalog-admin@example.test",password});
+  const response = await request(app).post("/api/v1/admin/uploads/categories")
+    .set(bearer(login.body.data.accessToken))
+    .attach("image", png(), {filename:"category.png",contentType:"image/png"});
+  assert.equal(response.status,403);
 });
 
 test("valid JPEG, PNG and WebP uploads are optimized to WebP before storage", async () => {
@@ -141,10 +151,10 @@ test("valid JPEG, PNG and WebP uploads are optimized to WebP before storage", as
   }
   }
 });
-test("a genuine high-detail JPEG within the 8 MiB cap is decoded and optimized on both upload routes", async () => {
+test("a genuine high-detail JPEG within the 15 MiB cap is decoded and optimized on both upload routes", async () => {
   const bytes = await sharp(randomBytes(2000 * 2000 * 3), {raw: {width: 2000, height: 2000, channels: 3}})
     .jpeg({quality: 100, chromaSubsampling: "4:2:0"}).toBuffer();
-  assert.ok(bytes.length > 2 * 1024 * 1024 && bytes.length <= 8 * 1024 * 1024, `Fixture size: ${bytes.length}`);
+  assert.ok(bytes.length > 2 * 1024 * 1024 && bytes.length <= 15 * 1024 * 1024, `Fixture size: ${bytes.length}`);
   for (const kind of ["giving", "events"] as const) {
     const response = await request(app).post(`/api/v1/admin/uploads/${kind}`).set(bearer(adminToken))
       .attach("image", bytes, {filename: "large-photo.jpg", contentType: "image/jpeg"});
@@ -175,8 +185,8 @@ test("corrupt/truncated JPEG and unsupported images never reach storage", async 
     assert.equal(response.body.error.code, "INVALID_IMAGE");
   }
 });
-test("both upload routes accept valid images below and exactly 8 MiB and reject one byte above", async () => {
-  const limit = 8 * 1024 * 1024;
+test("both upload routes accept valid images below and exactly 15 MiB and reject one byte above", async () => {
+  const limit = 15 * 1024 * 1024;
   for (const kind of ["giving", "events"] as const) {
     for (const size of [limit - 1, limit]) {
       // A valid JPEG stream with legal zero padding exercises exact byte limits
@@ -194,7 +204,7 @@ test("both upload routes accept valid images below and exactly 8 MiB and reject 
       .set(bearer(adminToken)).attach("image", Buffer.alloc(limit + 1), {filename: "oversized.jpg", contentType: "image/jpeg"});
     assert.equal(response.status, 413);
     assert.equal(response.body.error.code, "IMAGE_TOO_LARGE");
-    assert.match(response.body.error.message, /8 MiB/);
+    assert.match(response.body.error.message, /15 MiB/);
     assert.equal(mock.uploads.length, uploadsBefore);
   }
 });
@@ -240,7 +250,7 @@ test("spoofed, malformed and oversized images are rejected before storage", asyn
   const oversized = await request(app)
     .post("/api/v1/admin/uploads/giving")
     .set(bearer(adminToken))
-    .attach("image", Buffer.alloc(8 * 1024 * 1024 + 1), {
+    .attach("image", Buffer.alloc(15 * 1024 * 1024 + 1), {
       filename: "large.png",
       contentType: "image/png",
     });
@@ -360,9 +370,9 @@ test("partial development R2 configuration stays safely disabled", () => {
   const partial = loadConfig({ ...env, R2_BUCKET_NAME: "catalog-images" });
   assert.equal(hasImageStorageConfig(partial), false);
 });
-test("image upload limit defaults to 8 MiB and rejects a larger configured value", () => {
-  assert.equal(loadConfig(env).PRODUCT_IMAGE_MAX_BYTES, 8 * 1024 * 1024);
-  assert.throws(() => loadConfig({...env, PRODUCT_IMAGE_MAX_BYTES: String(9 * 1024 * 1024)}));
+test("image upload limit defaults to 15 MiB and rejects a larger configured value", () => {
+  assert.equal(loadConfig({...env, PRODUCT_IMAGE_MAX_BYTES: undefined}).PRODUCT_IMAGE_MAX_BYTES, 15 * 1024 * 1024);
+  assert.throws(() => loadConfig({...env, PRODUCT_IMAGE_MAX_BYTES: String(15 * 1024 * 1024 + 1)}));
 });
 test("category uploads use existing signature/size pipeline; referenced gallery images cannot be deleted",async()=>{
  const upload=await request(app).post("/api/v1/admin/uploads/categories").set(bearer(adminToken)).attach("image",png(),{filename:"category.png",contentType:"image/png"});

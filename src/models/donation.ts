@@ -17,6 +17,7 @@ const schema = new Schema(
     giving: { type: Schema.Types.ObjectId, ref: "Giving" },
     event: { type: Schema.Types.ObjectId, ref: "Event" },
     designationTitle: { type: String, required: true },
+    donationPurpose: { type: String, trim: true, maxlength: 500 },
     festivalTitle: String,
     donationOptionTitle: String,
     amountCents: {

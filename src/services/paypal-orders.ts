@@ -3,7 +3,7 @@ import type { Types } from "mongoose";
 import type { Config } from "../config/env.js";
 import { AppError } from "../utils/errors.js";
 import type { PayPalOrderInput } from "../validators/payments.js";
-import { resolveDonationDesignation } from "./donation-eligibility.js";
+import { resolveDonationDesignation, validateDonationPurpose } from "./donation-eligibility.js";
 import { PaymentService } from "./payments.js";
 import type { PayPalGateway, PayPalOrder } from "./paypal-gateway.js";
 import type { FeePolicy } from "./payment-fees.js";
@@ -26,10 +26,11 @@ export class PayPalOrderService {
     if (!this.config.PAYPAL_ENABLED || !this.config.PAYPAL_MERCHANT_ID || !this.config.PAYMENT_STATUS_TOKEN_SECRET)
       throw new AppError(503, "PAYPAL_UNAVAILABLE", "PayPal checkout is not configured");
     const designation = await resolveDonationDesignation(input);
-    const fingerprint = createHash("sha256").update(JSON.stringify({ ...input, donorPhone: input.donorPhone ?? "" })).digest("hex");
+    const donationPurpose = validateDonationPurpose(input.donationPurpose, designation);
+    const fingerprint = createHash("sha256").update(JSON.stringify({ ...input, ...(donationPurpose ? {donationPurpose} : {}), donorPhone: input.donorPhone ?? "" })).digest("hex");
     const token = actorId ? undefined : createHmac("sha256", this.config.PAYMENT_STATUS_TOKEN_SECRET).update(`paypal:${key}:${fingerprint}`).digest("base64url");
     const prepared = await this.payments.prepareNewPayPalDonationAttempt({
-      ...input, designationTitle: designation.title, idempotencyKey: key, requestFingerprint: fingerprint,
+      ...input, donationPurpose, designationTitle: designation.title, idempotencyKey: key, requestFingerprint: fingerprint,
       feePolicy: policy(this.config), actorId, guestStatusToken: token,
     });
     const attempt = prepared.attempt;

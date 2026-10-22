@@ -41,7 +41,7 @@ export async function donationViews(rows: Row[], admin: boolean) {
     const reversals=succeeded.filter((item)=>item.type==="reversal").reduce((n,item)=>n+item.amountCents,0);
     const adjustedLoss=Math.max(0,outflows-reversals);
     const base=Number(attempt?.baseDonationCents??row.amountCents);
-    const snapshots = {festivalTitle: row.festivalTitle ?? null, donationOptionTitle: row.donationOptionTitle ?? null};
+    const snapshots = {festivalTitle: row.festivalTitle ?? null, donationOptionTitle: row.donationOptionTitle ?? null, donationPurpose: row.donationPurpose ?? null};
     const feeContribution=attempt?Number(attempt.feeContributionCents):typeof row.feeContributionCents==="number"?row.feeContributionCents:null;
     const gross=attempt?Number(attempt.totalChargeCents):typeof row.totalChargedCents==="number"?row.totalChargedCents:null;
     const providerFee=typeof attempt?.actualProviderFeeCents==="number"?attempt.actualProviderFeeCents:typeof row.actualProviderFeeCents==="number"?row.actualProviderFeeCents:null;

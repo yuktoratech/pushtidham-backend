@@ -17,6 +17,7 @@ const config = loadConfig({NODE_ENV: "test", MONGODB_URI: "mongodb://127.0.0.1/u
 const app = createApp(config);
 let mongo: MongoMemoryServer;
 let completedId: string;
+let purposeId: string;
 const ineligible: string[] = [];
 const reference = "TEST-OWNER-RECEIPT";
 const completedAt = new Date("2026-10-01T12:00:00Z");
@@ -32,6 +33,7 @@ before(async () => {
   });
   const base = {user: owner, donorName: "Receipt Fixture Donor", donorEmail: "receipt@example.test", type: "general", giving: new Types.ObjectId(), designationTitle: "TEST Mangla Seva", amountCents: 8400, currency: "USD", paymentMethod: "offline", source: "offline"} as const;
   completedId = (await Donation.create({...base, donationNumber: reference, status: "completed", verifiedBy: admin, verifiedAt: completedAt, completedAt})).id;
+  purposeId = (await Donation.create({...base, donationNumber:"TEST-OTHER-PURPOSE",donationPurpose:"Temple library and community classes",status:"completed",verifiedBy:admin,verifiedAt:completedAt,completedAt})).id;
   for (const status of ["pending", "rejected", "completed"] as const) {
     ineligible.push((await Donation.create({...base, donationNumber: `TEST-INELIGIBLE-${status}`, status})).id);
   }
@@ -66,6 +68,23 @@ test("receipt amounts in words preserve dollars and cents", () => {
   assert.equal(amountInWords(25100), "Two hundred fifty-one dollars and 00/100");
   assert.equal(amountInWords(101), "One dollar and 01/100");
   assert.equal(amountInWords(1000000), "Ten thousand dollars and 00/100");
+});
+
+test("verified Other receipt includes a separate purpose page", async () => {
+  const response=await request(app).get(`/api/v1/donations/${purposeId}/receipt`).set("Authorization","Bearer fixture-owner");
+  assert.equal(response.status,200);
+  const pdf=await PDFDocument.load(response.body);
+  assert.equal(pdf.getPageCount(),2);
+  const contents=pdf.getPages()[1]!.node.Contents();
+  assert.ok(contents instanceof PDFArray);
+  let text="";
+  for(let i=0;i<contents.size();i++){
+    const stream=pdf.context.lookup(contents.get(i));
+    assert.ok(stream instanceof PDFRawStream);
+    const operators=Buffer.from(decodePDFRawStream(stream).decode()).toString();
+    for(const match of operators.matchAll(/<([0-9a-f]+)>\s*Tj/gi))text+=Buffer.from(match[1]!,"hex").toString("latin1");
+  }
+  assert.match(text,/Temple library and community classes/);
 });
 
 test("a different authenticated fixture donor cannot download the owner's receipt", async () => {

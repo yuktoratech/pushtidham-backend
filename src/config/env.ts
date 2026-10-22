@@ -72,8 +72,8 @@ const schema = z
       .number()
       .int()
       .min(1)
-      .max(8 * 1024 * 1024)
-      .default(8 * 1024 * 1024),
+      .max(15 * 1024 * 1024)
+      .default(15 * 1024 * 1024),
     STRIPE_SECRET_KEY: optionalSecret,
     STRIPE_WEBHOOK_SECRET: optionalSecret,
     STRIPE_API_VERSION: z.literal("2026-09-30.endive").default("2026-09-30.endive"),

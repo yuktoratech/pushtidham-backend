@@ -5,7 +5,7 @@ import type { Config } from "../config/env.js";
 import { AuthService } from "../services/auth.js";
 import { CatalogService } from "../services/catalog.js";
 import { DonationService } from "../services/donations.js";
-import { authenticate, authorizeRoles } from "../middleware/auth.js";
+import { authenticate, authorizeRoles, authorizeCategoryManager } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { authController } from "../controllers/auth.js";
 import { catalogController } from "../controllers/catalog.js";
@@ -50,6 +50,7 @@ import type { ImageStorage } from "../services/image-storage.js";
 import { imageDeleteBody, imageKindParams } from "../validators/catalog.js";
 import { givingCategoryBody, givingCategoryStatus, givingCategoryQuery, publicGivingQuery } from "../validators/catalog.js";
 import { givingCategoryController } from "../controllers/giving-categories.js";
+import {categoryEditFreeze} from "../middleware/category-edit-freeze.js";
 export function routes(
   config: Config,
   dependencies: {
@@ -200,6 +201,8 @@ export function routes(
     "/uploads/:kind",
     images.available,
     validate({ params: imageKindParams, query: imageUploadQuery }),
+    (req, res, next) => (req.validated.params as {kind: string}).kind === "categories"
+      ? authorizeCategoryManager(req, res, next) : next(),
     images.parse,
     images.upload,
   );
@@ -249,11 +252,11 @@ export function routes(
   );
   router.use("/admin", authenticate(auth), authorizeRoles("admin"), admin);
   const adminCategories = givingCategoryController(catalog, true);
-  admin.get("/giving-categories", validate({query: givingCategoryQuery}), adminCategories.list);
-  admin.get("/giving-categories/:id", validate({params: idParams}), adminCategories.get);
-  admin.post("/giving-categories", validate({body: givingCategoryBody}), adminCategories.create);
-  admin.put("/giving-categories/:id", validate({params: idParams, body: givingCategoryBody}), adminCategories.replace);
-  admin.patch("/giving-categories/:id/status", validate({params: idParams, body: givingCategoryStatus}), adminCategories.status);
-  admin.delete("/giving-categories/:id", validate({params: idParams}), adminCategories.remove);
+  admin.get("/giving-categories", authorizeCategoryManager, validate({query: givingCategoryQuery}), adminCategories.list);
+  admin.get("/giving-categories/:id", authorizeCategoryManager, validate({params: idParams}), adminCategories.get);
+  admin.post("/giving-categories", authorizeCategoryManager, categoryEditFreeze, validate({body: givingCategoryBody}), adminCategories.create);
+  admin.put("/giving-categories/:id", authorizeCategoryManager, categoryEditFreeze, validate({params: idParams, body: givingCategoryBody}), adminCategories.replace);
+  admin.patch("/giving-categories/:id/status", authorizeCategoryManager, categoryEditFreeze, validate({params: idParams, body: givingCategoryStatus}), adminCategories.status);
+  admin.delete("/giving-categories/:id", authorizeCategoryManager, categoryEditFreeze, validate({params: idParams}), adminCategories.remove);
   return router;
 }

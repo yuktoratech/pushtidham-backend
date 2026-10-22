@@ -27,6 +27,8 @@ export async function resolveDonationDesignation(
       status: "active",
     });
     if (!giving) missing("Active Giving");
+    if (giving.slug === "other" && (giving.category !== "general" || giving.amountType !== "custom" || giving.fixedAmountsCents.length))
+      throw new AppError(409, "INVALID_OTHER_CONFIGURATION", "Other Giving must be a custom-only General Donation");
     if (input.categoryId && String(giving.categoryId) !== input.categoryId)
       throw new AppError(422, "CATEGORY_MISMATCH", "Giving does not belong to the selected category");
     if (!offline && giving.categoryId && !(await GivingCategory.exists({_id: giving.categoryId, status: "active"})))
@@ -62,4 +64,17 @@ export async function resolveDonationDesignation(
 export async function requireActiveDonationUser(user?: Types.ObjectId) {
   if (user && !(await User.exists({ _id: user, status: "active" })))
     missing("Active user");
+}
+
+export function validateDonationPurpose(
+  purpose: string | undefined,
+  designation: Awaited<ReturnType<typeof resolveDonationDesignation>>,
+) {
+  const normalized = purpose?.trim();
+  const isOther = "giving" in designation && designation.giving?.slug === "other";
+  if (isOther && !normalized)
+    throw new AppError(422, "DONATION_PURPOSE_REQUIRED", "Donation purpose is required for Other");
+  if (normalized && normalized.length > 500)
+    throw new AppError(422, "INVALID_DONATION_PURPOSE", "Donation purpose must be 500 characters or fewer");
+  return normalized || undefined;
 }

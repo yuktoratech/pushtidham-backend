@@ -17,13 +17,14 @@ import {resolveDonationDesignation} from "../src/services/donation-eligibility.j
 import {DonationService} from "../src/services/donations.js";
 import {givingBody,eventBody} from "../src/validators/catalog.js";
 import {categoryMapping,legacyMapping,verifyCategoryMigrationRecords} from "../src/content/giving-category-migration.js";
+import {CATEGORY_FREEZE_ID} from "../src/middleware/category-edit-freeze.js";
 const config=loadConfig({NODE_ENV:"test",MONGODB_URI:"mongodb://127.0.0.1/isolated_categories",FRONTEND_URL:"http://localhost:3000",JWT_ACCESS_SECRET:randomBytes(40).toString("hex"),JWT_REFRESH_SECRET:randomBytes(40).toString("hex")});
 const app=createApp(config),service=new CatalogService();
 let mongo:MongoMemoryServer,token:string,categoryId:string,givingId:string,eventId:string;
 before(async()=>{
  mongo=await MongoMemoryServer.create();await mongoose.connect(mongo.getUri(),{dbName:"category_isolated"});
  await Promise.all([GivingCategory.init(),Giving.init(),Event.init(),User.init()]);
- const password=randomBytes(20).toString("hex");await User.create({name:"Admin",email:"category-admin@example.test",passwordHash:await bcrypt.hash(password,4),role:"admin"});
+ const password=randomBytes(20).toString("hex");await User.create({name:"Admin",email:"category-admin@example.test",passwordHash:await bcrypt.hash(password,4),role:"admin",canManageGivingCategories:true});
  const login=await request(app).post("/api/v1/auth/login").send({email:"category-admin@example.test",password});assert.equal(login.status,200);token=login.body.data.accessToken;
 });
 after(async()=>{await mongoose.disconnect();await mongo?.stop()});
@@ -33,6 +34,18 @@ test("category APIs require administrator and enforce unique slugs",async()=>{
  assert.equal(response.status,201);categoryId=response.body.data._id;
  assert.equal((await request(app).post("/api/v1/admin/giving-categories").set("Authorization","Bearer "+token).send({name:"Duplicate",slug:"daily-seva"})).status,409);
  const publicRows=await request(app).get("/api/v1/giving-categories");assert.equal(publicRows.body.data.length,1);
+ const normalPassword=randomBytes(20).toString("hex");await User.create({name:"Normal Admin",email:"normal-category-admin@example.test",passwordHash:await bcrypt.hash(normalPassword,4),role:"admin"});
+ const normalLogin=await request(app).post("/api/v1/auth/login").send({email:"normal-category-admin@example.test",password:normalPassword});
+ const normalAuth={Authorization:"Bearer "+normalLogin.body.data.accessToken};
+ for(const method of ["get","post"] as const){
+  const response=method==="get"?await request(app).get("/api/v1/admin/giving-categories").set(normalAuth):await request(app).post("/api/v1/admin/giving-categories").set(normalAuth).send({name:"Forbidden",slug:"forbidden"});
+  assert.equal(response.status,403);
+ }
+ assert.equal((await request(app).get("/api/v1/admin/giving-categories").set("Authorization","Bearer "+token)).status,200);
+ assert.equal((await request(app).put(`/api/v1/admin/giving-categories/${categoryId}`).set(normalAuth).send({name:"Blocked",slug:"daily-seva"})).status,403);
+ assert.equal((await request(app).patch(`/api/v1/admin/giving-categories/${categoryId}/status`).set(normalAuth).send({status:"inactive"})).status,403);
+ assert.equal((await request(app).get(`/api/v1/admin/giving-categories/${categoryId}`).set(normalAuth)).status,403);
+ assert.equal((await request(app).delete(`/api/v1/admin/giving-categories/${categoryId}`).set(normalAuth)).status,403);
  const donorPassword=randomBytes(20).toString("hex");await User.create({name:"Donor",email:"category-donor@example.test",passwordHash:await bcrypt.hash(donorPassword,4),role:"donor"});
  const login=await request(app).post("/api/v1/auth/login").send({email:"category-donor@example.test",password:donorPassword});
  assert.equal((await request(app).post("/api/v1/admin/giving-categories").set("Authorization","Bearer "+login.body.data.accessToken).send({name:"Forbidden"})).status,403);
@@ -53,13 +66,40 @@ test("Giving membership validates IDs, amounts, filtering and safe category dele
  const mixed=await service.createGiving(givingBody.parse({title:"Mixed",slug:"mixed",categoryId,amountType:"fixed_and_custom",fixedAmountsCents:[2500]}));
  assert.ok(await resolveDonationDesignation({type:"general",giving:String(mixed._id),amountCents:6700}));
 });
+test("Other requires a trimmed purpose for online and offline donations while existing Giving stays optional",async()=>{
+ const category=await GivingCategory.create({name:"General Donation",slug:"general-donation",status:"active"});
+ const other=await Giving.create({title:"Other",slug:"other",categoryId:category._id,category:"general",amountType:"custom",fixedAmountsCents:[],status:"active"});
+ const body={donorName:"Fixture Donor",donorEmail:"fixture@example.test",type:"general",giving:String(other._id),amountCents:100,currency:"USD"};
+ const missing=await request(app).post("/api/v1/donations").send({...body,paymentMethod:"bank_transfer"});
+ assert.equal(missing.status,422);
+ assert.equal((await request(app).post("/api/v1/donations").send({...body,amountCents:99,donationPurpose:"Support",paymentMethod:"bank_transfer"})).status,400);
+ assert.equal((await request(app).post("/api/v1/donations").send({...body,amountCents:1000001,donationPurpose:"Support",paymentMethod:"bank_transfer"})).status,400);
+ assert.equal((await request(app).post("/api/v1/donations").send({...body,donationPurpose:"x".repeat(501),paymentMethod:"bank_transfer"})).status,400);
+ const guest=await request(app).post("/api/v1/donations").send({...body,donationPurpose:"  Guest purpose  ",paymentMethod:"bank_transfer"});
+ assert.equal(guest.status,201);
+ assert.equal(guest.body.data.donationPurpose,"Guest purpose");
+ const blank=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,donationPurpose:"   "});
+ assert.ok(blank.status>=400);
+ const saved=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,donationPurpose:"  Community support  "});
+ assert.equal(saved.status,201);
+ assert.equal(saved.body.data.donationPurpose,"Community support");
+ assert.equal((await Donation.findById(saved.body.data._id))?.donationPurpose,"Community support");
+ const adminView=await request(app).get(`/api/v1/admin/donations/${saved.body.data._id}`).set("Authorization","Bearer "+token);
+ assert.equal(adminView.body.data.donationPurpose,"Community support");
+ const legacy=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,giving:givingId,amountCents:8400});
+ assert.equal(legacy.status,201);
+ assert.equal(legacy.body.data.donationPurpose,undefined);
+ await assert.rejects(Giving.create({title:"Other",slug:"other",categoryId:category._id,category:"general",amountType:"custom",fixedAmountsCents:[],status:"active"}));
+ assert.equal((await Giving.countDocuments({slug:"other"})),1);
+});
 test("Event cover/gallery preserve old updates and reject new public Event donations",async()=>{
+ const existingDonationCount=await Donation.countDocuments();
  const event=await service.createEvent(eventBody.parse({title:"Historical event",slug:"historical",startsAt:"2020-01-01T12:00:00Z",location:"Haveli",status:"published",image:"/images/diya.webp",gallery:[{url:"/images/temple.webp",alt:"Haveli",displayOrder:0}]}));
  eventId=String(event._id);
  await service.replaceEvent(eventId,eventBody.parse({title:"Historical event",startsAt:"2020-01-01T12:00:00Z",location:"Haveli",status:"published",image:"/images/diya.webp"}));
  assert.equal((await Event.findById(eventId))!.gallery.length,1);
  await assert.rejects(resolveDonationDesignation({type:"event",event:eventId,amountCents:40000}),/information/);
- assert.equal((await Donation.countDocuments()),0);
+ assert.equal((await Donation.countDocuments()),existingDonationCount);
  const offline=await new DonationService().create({donorName:"Historical donor",donorEmail:"history@example.test",type:"event",event:eventId,amountCents:40000,currency:"USD",status:"completed"},undefined,true);
  assert.equal(offline.amountCents,40000);assert.equal(offline.designationTitle,"Historical event");assert.equal(offline.status,"completed");
  assert.equal((await service.get("event","historical")).title,"Historical event");
@@ -89,4 +129,17 @@ test("category updates, deactivation and unreferenced deletion preserve assigned
  const existing=await Giving.findById(givingId);
  await service.replaceGiving(givingId,givingBody.parse({title:"Mangla Seva",amountType:"fixed",fixedAmountsCents:[8400],category:"daily_seva"}));
  assert.equal(String((await Giving.findById(givingId))!.categoryId),String(existing!.categoryId));
+});
+test("shared category freeze blocks admin writes while leaving reads available",async()=>{
+ const flags=mongoose.connection.db!.collection("migrationflags");
+ await flags.updateOne({_id:CATEGORY_FREEZE_ID as never},{$set:{active:true,operation:"category-artwork-v1"}},{upsert:true});
+ try {
+  const auth={Authorization:"Bearer "+token};
+  assert.equal((await request(app).post("/api/v1/admin/giving-categories").set(auth).send({name:"Frozen",slug:"frozen"})).status,503);
+  assert.equal((await request(app).put(`/api/v1/admin/giving-categories/${categoryId}`).set(auth).send({name:"Changed",slug:"daily-seva"})).status,503);
+  assert.equal((await request(app).patch(`/api/v1/admin/giving-categories/${categoryId}/status`).set(auth).send({status:"inactive"})).status,503);
+  assert.equal((await request(app).delete(`/api/v1/admin/giving-categories/${categoryId}`).set(auth)).status,503);
+  assert.equal((await request(app).get("/api/v1/giving-categories")).status,200);
+  assert.equal(await GivingCategory.countDocuments({slug:"frozen"}),0);
+ } finally {await flags.deleteOne({_id:CATEGORY_FREEZE_ID as never})}
 });

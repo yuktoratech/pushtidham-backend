@@ -14,6 +14,7 @@ const fields = {
   giving: id.optional(),
   event: id.optional(),
   amountCents: money,
+  donationPurpose: z.string().trim().min(1).max(500).optional(),
   currency: z.literal("USD").default("USD"),
 };
 const references = (v: { type: string; giving?: string; event?: string }) =>

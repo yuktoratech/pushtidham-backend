@@ -29,7 +29,7 @@ export async function exportDonations(query: DonationExportQuery, res: Response)
   if (count > maxRows) throw new AppError(413, "EXPORT_TOO_LARGE", `Narrow the filters to ${maxRows} records or fewer`);
   res.status(200).set({"Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="pushtidham-donations.csv"', "Cache-Control": "no-store"});
   const write = async (line: string) => {if (!res.write(line) && !res.destroyed) await once(res, "drain");};
-  await write("Donation reference,Date (America/New_York),Donor name,Donor email,Category,Purpose,Base donation USD,Gross charged USD,Status,Payment method,Record class,Festival,Donation option\r\n");
+  await write("Donation reference,Date (America/New_York),Donor name,Donor email,Category,Purpose,Donation purpose,Base donation USD,Gross charged USD,Status,Payment method,Record class,Festival,Donation option\r\n");
   let totalBase = 0, totalCompletedBase = 0, exported = 0;
   const cursor = Donation.aggregate([...pipeline, {$sort: {createdAt: -1, _id: -1}}]).cursor({batchSize: 250});
   let batch: Array<Record<string, unknown> & {_id: import("mongoose").Types.ObjectId}> = [];
@@ -42,7 +42,7 @@ export async function exportDonations(query: DonationExportQuery, res: Response)
       if (row.donationStatus === "completed") totalCompletedBase += row.baseDonationCents;
       exported++;
       const donor = "donor" in row ? row.donor : {name: "", email: ""};
-      await write([row.donationNumber, date(row.createdAt), donor.name, donor.email, row.type === "event" ? "Event" : "General", row.designationTitle, amount(row.baseDonationCents), amount(row.grossChargedCents), row.donationStatus, row.paymentMethod, row.recordKind, row.festivalTitle, row.donationOptionTitle].map(csv).join(",") + "\r\n");
+      await write([row.donationNumber, date(row.createdAt), donor.name, donor.email, row.type === "event" ? "Event" : "General", row.designationTitle, row.donationPurpose, amount(row.baseDonationCents), amount(row.grossChargedCents), row.donationStatus, row.paymentMethod, row.recordKind, row.festivalTitle, row.donationOptionTitle].map(csv).join(",") + "\r\n");
     }
     batch = [];
   };
@@ -54,8 +54,8 @@ export async function exportDonations(query: DonationExportQuery, res: Response)
     }
     await flush();
     if (!res.destroyed) {
-      await write(["TOTAL ALL BASE", "", "", "", "", `${exported} records`, amount(totalBase)].map(csv).join(",") + "\r\n");
-      await write(["TOTAL COMPLETED BASE", "", "", "", "", "", amount(totalCompletedBase)].map(csv).join(",") + "\r\n");
+      await write(["TOTAL ALL BASE", "", "", "", "", `${exported} records`, "", amount(totalBase)].map(csv).join(",") + "\r\n");
+      await write(["TOTAL COMPLETED BASE", "", "", "", "", "", "", amount(totalCompletedBase)].map(csv).join(",") + "\r\n");
       res.end();
     }
   } finally {await cursor.close();}

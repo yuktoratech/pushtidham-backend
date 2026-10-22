@@ -9,6 +9,7 @@ declare module "express-serve-static-core" {
     principal?: {
       id: Types.ObjectId;
       role: "donor" | "admin";
+      canManageGivingCategories: boolean;
       sessionId: string;
     };
     requestId: string;

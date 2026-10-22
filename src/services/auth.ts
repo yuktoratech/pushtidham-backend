@@ -15,6 +15,7 @@ export const safeUser = (user: {
   phone?: string;
   role: string;
   status: string;
+    canManageGivingCategories?: boolean;
 }) => ({
   id: String(user._id),
   name: user.name,
@@ -22,6 +23,7 @@ export const safeUser = (user: {
   phone: user.phone ?? "",
   role: user.role,
   status: user.status,
+    canManageGivingCategories: user.role === "admin" && user.canManageGivingCategories === true,
 });
 const hash = (v: string) => createHash("sha256").update(v).digest("hex");
 const dummyHash = bcrypt.hash(randomBytes(32).toString("hex"), BCRYPT_COST);
@@ -200,6 +202,7 @@ export class AuthService {
     return {
       id: user._id,
       role: user.role as "donor" | "admin",
+        canManageGivingCategories: user.role === "admin" && user.canManageGivingCategories === true,
       sessionId: claims.sid,
     };
   }

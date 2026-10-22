@@ -26,3 +26,8 @@ export function authorizeRoles(
     next();
   };
 }
+export const authorizeCategoryManager: RequestHandler = (req, _res, next) => {
+  if (req.principal?.role !== "admin" || req.principal.canManageGivingCategories !== true)
+    throw new AppError(403, "FORBIDDEN", "Category management requires developer authorization");
+  next();
+};

@@ -108,6 +108,35 @@ export class ReceiptService {
     draw("Thank You", 34, 58, 12, true, green);
     draw("Jay Shree Krishna", 34, 42, 11, true, green);
     draw("USD | Verified donation acknowledgment", 454, 50, 9);
+    if (row.donationPurpose) {
+      const purposePage = () => {
+        const next = pdf.addPage([792, 396]);
+        next.drawRectangle({x: 18, y: 18, width: 756, height: 360, borderColor: gold, borderWidth: 0.8});
+        next.drawText("DONATION PURPOSE", {x: 34, y: 347, size: 12, font: bold, color: green});
+        next.drawText(row.donationNumber, {x: 34, y: 326, size: 10, font, color: ink});
+        return next;
+      };
+      let detailPage = purposePage();
+      let y = 297;
+      const writeLine = (line: string) => {
+        if (y < 45) { detailPage = purposePage(); y = 297; }
+        detailPage.drawText(line, {x: 34, y, size: 11, font, color: ink});
+        y -= 17;
+      };
+      for (const paragraph of row.donationPurpose.split(/\r?\n/)) {
+        let line = "";
+        for (const character of paragraph) {
+          const candidate = line + character;
+          try { font.encodeText(candidate); } catch { throw new AppError(422, "RECEIPT_FONT_UNSUPPORTED", "This receipt contains characters that the PDF font cannot render; contact the temple"); }
+          if (line && font.widthOfTextAtSize(candidate, 11) > 710) {
+            writeLine(line);
+            line = character;
+          } else line = candidate;
+        }
+        if (line) writeLine(line);
+        y -= 7;
+      }
+    }
     return {bytes: await pdf.save(), filename: `${row.donationNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`};
   }
 }
