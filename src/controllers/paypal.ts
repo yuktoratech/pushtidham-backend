@@ -2,27 +2,16 @@ import { createHash } from "node:crypto";
 import type { RequestHandler } from "express";
 import type { Config } from "../config/env.js";
 import { AppError } from "../utils/errors.js";
-import type { PayPalOrderInput } from "../validators/payments.js";
-import { PayPalOrderService } from "../services/paypal-orders.js";
+import type { PayPalOrderService } from "../services/paypal-orders.js";
 import { PayPalEventService } from "../services/paypal-events.js";
 import type { PayPalGateway } from "../services/paypal-gateway.js";
-import { PaymentService } from "../services/payments.js";
 
-export function paypalController(config: Config, gateway?: PayPalGateway, orders?: PayPalOrderService, events?: PayPalEventService, payments = new PaymentService()) {
-  const create: RequestHandler = async (req, res) => {
-    if (!orders) throw new AppError(503, "PAYPAL_UNAVAILABLE", "PayPal checkout is not configured");
-    const data = await orders.create(req.validated.body as PayPalOrderInput, req.get("Idempotency-Key") ?? "", req.principal?.id);
-    res.status(201).json({ success: true, data });
+export function paypalController(config: Config, gateway?: PayPalGateway, _orders?: PayPalOrderService, events?: PayPalEventService) {
+  const create: RequestHandler = async () => {
+    throw new AppError(410, "PAYPAL_RETIRED", "New PayPal donations are unavailable");
   };
-  const capture: RequestHandler = async (req, res) => {
-    if (!gateway || !events) throw new AppError(503, "PAYPAL_UNAVAILABLE", "PayPal checkout is not configured");
-    const orderId = (req.validated.params as { orderId: string }).orderId;
-    const attempt = await payments.requirePayPalCaptureAccess(orderId, req.principal?.id, req.get("X-Payment-Status-Token"));
-    const authoritative = await gateway.getOrder(orderId);
-    if (authoritative.status !== "APPROVED" && authoritative.status !== "COMPLETED") throw new AppError(409, "PAYPAL_ORDER_NOT_APPROVED", "PayPal order is not approved for capture");
-    const order = authoritative.status === "COMPLETED" ? authoritative : await gateway.captureOrder(orderId, `capture:${attempt._id}`);
-    await events.applyOrder(order, `capture:${order.id}:${order.status}`, "paypal.capture.reconciliation", createHash("sha256").update(`${order.id}:${order.status}`).digest("hex"));
-    res.json({ success: true, data: { orderId: order.id, attemptId: String(attempt._id), status: order.status } });
+  const capture: RequestHandler = async () => {
+    throw new AppError(410, "PAYPAL_RETIRED", "New PayPal captures are unavailable");
   };
   const webhook: RequestHandler = async (req, res) => {
     if (!gateway || !events || !config.PAYPAL_WEBHOOK_ID) throw new AppError(503, "PAYPAL_WEBHOOK_UNAVAILABLE", "PayPal webhook is not configured");

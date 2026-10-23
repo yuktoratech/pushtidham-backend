@@ -247,7 +247,7 @@ test("checkout validates eligibility, fixed amounts, methods and idempotency hea
         event: new mongoose.Types.ObjectId().toString(),
       })
     ).status,
-    404,
+    409,
   );
 });
 
@@ -271,7 +271,7 @@ test("guest card checkout is safe, idempotent and fee opt-in is server-calculate
   assert.equal(status.body.data.donorEmailSnapshot, undefined);
 });
 
-test("event checkout and fee opt-out preserve the server-authoritative donation amount", async () => {
+test("informational Events cannot start online Stripe checkout", async () => {
   const created = await checkout({
     type: "event",
     giving: undefined,
@@ -279,13 +279,11 @@ test("event checkout and fee opt-out preserve the server-authoritative donation 
     amountCents: 4321,
     coverFees: false,
   });
-  assert.equal(created.status, 201);
-  assert.equal(created.body.data.baseDonationCents, 4321);
-  assert.equal(created.body.data.feeContributionCents, 0);
-  assert.equal(created.body.data.totalChargeCents, 4321);
-  const donation = await Donation.findOne();
-  assert.equal(String(donation?.event), eventId);
-  assert.equal(donation?.giving, undefined);
+  assert.equal(created.status, 409);
+  assert.equal(created.body.error.code, "EVENT_DONATIONS_DISABLED");
+  assert.equal(await Donation.countDocuments(), 0);
+  assert.equal(await PaymentAttempt.countDocuments(), 0);
+  assert.equal(stripe.createCalls, 0);
 });
 
 test("authenticated donor checkout owns history without email matching", async () => {
@@ -378,6 +376,27 @@ test("card failure and authoritative amount mismatches never complete a donation
   assert.equal(mismatchResponse.status, 409);
   assert.equal(mismatchResponse.body.error.code, "STRIPE_METADATA_MISMATCH");
   assert.equal((await Donation.findById(mismatchedAttempt!.donation))?.status, "pending");
+});
+
+test("verified canceled intent is idempotent and cannot undo a completed donation", async () => {
+  const canceled = await checkout({}, "card-canceled-checkout-key-0001");
+  const attempt = await PaymentAttempt.findById(canceled.body.data.attemptId);
+  setIntentStatus(attempt!.paymentId!, "canceled");
+  const intent = stripe.intents.get(attempt!.paymentId!)!;
+  assert.equal((await webhook("payment_intent.canceled", intent, "evt_card_canceled")).status, 200);
+  assert.equal((await PaymentAttempt.findById(attempt!._id))?.status, "canceled");
+  assert.equal((await Donation.findById(attempt!.donation))?.status, "pending");
+  assert.equal((await webhook("payment_intent.canceled", intent, "evt_card_canceled")).status, 200);
+  assert.equal(await WebhookEvent.countDocuments({eventId: "evt_card_canceled"}), 1);
+
+  const paid = await checkout({}, "card-paid-then-canceled-key-0001");
+  const paidAttempt = await PaymentAttempt.findById(paid.body.data.attemptId);
+  setIntentStatus(paidAttempt!.paymentId!, "succeeded");
+  await webhook("payment_intent.succeeded", stripe.intents.get(paidAttempt!.paymentId!)!, "evt_paid_before_cancel");
+  setIntentStatus(paidAttempt!.paymentId!, "canceled");
+  await webhook("payment_intent.canceled", stripe.intents.get(paidAttempt!.paymentId!)!, "evt_late_cancel");
+  assert.equal((await PaymentAttempt.findById(paidAttempt!._id))?.status, "succeeded");
+  assert.equal((await Donation.findById(paidAttempt!.donation))?.status, "completed");
 });
 
 test("ACH verification, processing, delayed success, failure and expiry stay provider-controlled", async () => {

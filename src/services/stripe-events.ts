@@ -85,7 +85,8 @@ export class StripeEventService {
       }
       case "payment_intent.processing":
       case "payment_intent.succeeded":
-      case "payment_intent.payment_failed": {
+      case "payment_intent.payment_failed":
+      case "payment_intent.canceled": {
         const object = event.data.object as Stripe.PaymentIntent;
         const intent = await this.stripe.retrievePaymentIntent(object.id);
         return this.applyPaymentIntent(intent, event.id, event.type, payloadDigest);
