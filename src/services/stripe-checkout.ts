@@ -111,10 +111,12 @@ export class StripeCheckoutService {
       cancel_url: this.config.STRIPE_CHECKOUT_CANCEL_URL,
       client_reference_id: String(attempt._id),
       customer_email: input.donorEmail,
-      allowed_payment_method_types:
-        input.methodFamily === "card"
-          ? ["card", "link"]
-          : ["us_bank_account"],
+      // Stripe API 2026-09-30 uses Dashboard-managed dynamic payment methods.
+      // The configured Payment Method Configuration, or Stripe's dashboard default,
+      // determines what Checkout presents; explicit payment_method_types is rejected.
+      ...(this.paymentMethodConfiguration(input.methodFamily)
+        ? { payment_method_configuration: this.paymentMethodConfiguration(input.methodFamily) }
+        : {}),
       ...(input.methodFamily === "ach"
         ? {
             payment_method_options: {
@@ -176,5 +178,11 @@ export class StripeCheckoutService {
       currency: "USD" as const,
       ...(prepared.statusToken ? { statusToken: prepared.statusToken } : {}),
     };
+  }
+
+  private paymentMethodConfiguration(methodFamily: "card" | "ach") {
+    return methodFamily === "card"
+      ? this.config.STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION ?? this.config.STRIPE_PAYMENT_METHOD_CONFIGURATION
+      : this.config.STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION ?? this.config.STRIPE_PAYMENT_METHOD_CONFIGURATION;
   }
 }

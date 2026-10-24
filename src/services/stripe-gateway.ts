@@ -41,7 +41,7 @@ export class StripeSdkGateway implements StripeGateway {
 
   retrievePaymentIntent(id: string) {
     return this.stripe.paymentIntents.retrieve(id, {
-      expand: ["latest_charge.balance_transaction"],
+      expand: ["latest_charge.balance_transaction", "payment_method"],
     });
   }
 

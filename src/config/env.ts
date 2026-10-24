@@ -77,6 +77,18 @@ const schema = z
     STRIPE_SECRET_KEY: optionalSecret,
     STRIPE_WEBHOOK_SECRET: optionalSecret,
     STRIPE_API_VERSION: z.literal("2026-09-30.endive").default("2026-09-30.endive"),
+    STRIPE_PAYMENT_METHOD_CONFIGURATION: z
+      .union([z.literal(""), z.string().regex(/^pmc_[A-Za-z0-9]+$/)])
+      .optional()
+      .transform((v) => v || undefined),
+    STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION: z
+      .union([z.literal(""), z.string().regex(/^pmc_[A-Za-z0-9]+$/)])
+      .optional()
+      .transform((v) => v || undefined),
+    STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION: z
+      .union([z.literal(""), z.string().regex(/^pmc_[A-Za-z0-9]+$/)])
+      .optional()
+      .transform((v) => v || undefined),
     STRIPE_CHECKOUT_SUCCESS_URL: optionalUrl,
     STRIPE_CHECKOUT_CANCEL_URL: optionalUrl,
     STRIPE_CARD_ENABLED: boolean,

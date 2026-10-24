@@ -29,6 +29,9 @@ const config = loadConfig({
   JWT_REFRESH_EXPIRES_IN: "7d",
   STRIPE_SECRET_KEY: "sk_test_mock_phase_4b_key",
   STRIPE_WEBHOOK_SECRET: "whsec_mock_phase_4b_secret",
+  STRIPE_PAYMENT_METHOD_CONFIGURATION: "pmc_mockphase4bconfiguration",
+  STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION: "pmc_mockcardconfiguration",
+  STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION: "pmc_mockachconfiguration",
   STRIPE_CHECKOUT_SUCCESS_URL:
     "http://localhost:3000/donation-confirmation?session_id={CHECKOUT_SESSION_ID}",
   STRIPE_CHECKOUT_CANCEL_URL: "http://localhost:3000/checkout?canceled=1",
@@ -50,6 +53,7 @@ class MockStripe implements StripeGateway {
   intents = new Map<string, Stripe.PaymentIntent>();
   charges = new Map<string, Stripe.Charge>();
   byIdempotency = new Map<string, Stripe.Checkout.Session>();
+  lastParams?: Stripe.Checkout.SessionCreateParams;
   event?: Stripe.Event;
   createCalls = 0;
 
@@ -58,13 +62,12 @@ class MockStripe implements StripeGateway {
     idempotencyKey: string,
   ) {
     this.createCalls++;
+    this.lastParams = params;
     const replay = this.byIdempotency.get(idempotencyKey);
     if (replay) return replay;
     const attemptId = params.metadata!.attemptId!;
     const paymentId = `pi_${attemptId}`;
-    const method = params.allowed_payment_method_types?.includes("us_bank_account")
-      ? "us_bank_account"
-      : "card";
+    const method = params.metadata?.methodFamily === "ach" ? "us_bank_account" : "card";
     const amount = params.line_items![0]!.price_data!.unit_amount!;
     const intent = {
       id: paymentId,
@@ -75,6 +78,7 @@ class MockStripe implements StripeGateway {
       status: "requires_action",
       metadata: params.payment_intent_data!.metadata!,
       latest_charge: null,
+      payment_method: { id: `pm_${attemptId}`, object: "payment_method", type: method },
       last_payment_error: null,
       next_action: null,
     } as unknown as Stripe.PaymentIntent;
@@ -271,6 +275,18 @@ test("guest card checkout is safe, idempotent and fee opt-in is server-calculate
   assert.equal(status.body.data.donorEmailSnapshot, undefined);
 });
 
+test("Checkout uses the selected Dashboard payment configuration instead of deprecated payment_method_types", async () => {
+  const card = await checkout();
+  assert.equal(card.status, 201);
+  assert.equal(stripe.lastParams?.payment_method_configuration, "pmc_mockcardconfiguration");
+  assert.equal("payment_method_types" in (stripe.lastParams ?? {}), false);
+  const ach = await checkout({ methodFamily: "ach" }, "selected-ach-configuration-key-0001");
+  assert.equal(ach.status, 201);
+  assert.equal(stripe.lastParams?.payment_method_configuration, "pmc_mockachconfiguration");
+  assert.equal("payment_method_types" in (stripe.lastParams ?? {}), false);
+  assert.equal(stripe.createCalls, 2);
+});
+
 test("informational Events cannot start online Stripe checkout", async () => {
   const created = await checkout({
     type: "event",
@@ -376,6 +392,46 @@ test("card failure and authoritative amount mismatches never complete a donation
   assert.equal(mismatchResponse.status, 409);
   assert.equal(mismatchResponse.body.error.code, "STRIPE_METADATA_MISMATCH");
   assert.equal((await Donation.findById(mismatchedAttempt!.donation))?.status, "pending");
+});
+
+test("a trusted Stripe payment-method mismatch never completes the selected donation", async () => {
+  const created = await checkout({ methodFamily: "ach" }, "ach-method-mismatch-key-0001");
+  const attempt = await PaymentAttempt.findById(created.body.data.attemptId);
+  const intent = stripe.intents.get(attempt!.paymentId!)!;
+  stripe.intents.set(intent.id, {
+    ...intent,
+    status: "succeeded",
+    amount_received: intent.amount,
+    payment_method: { id: "pm_card_mismatch", object: "payment_method", type: "card" },
+  } as Stripe.PaymentIntent);
+  const response = await webhook(
+    "payment_intent.succeeded",
+    stripe.intents.get(intent.id)!,
+    "evt_method_mismatch",
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await PaymentAttempt.findById(attempt!._id))?.status, "failed");
+  assert.equal((await Donation.findById(attempt!.donation))?.status, "pending");
+});
+
+test("a trusted unsupported dynamic Stripe method never completes a donation", async () => {
+  const created = await checkout({}, "unsupported-method-key-0001");
+  const attempt = await PaymentAttempt.findById(created.body.data.attemptId);
+  const intent = stripe.intents.get(attempt!.paymentId!)!;
+  stripe.intents.set(intent.id, {
+    ...intent,
+    status: "succeeded",
+    amount_received: intent.amount,
+    payment_method: { id: "pm_unsupported", object: "payment_method", type: "klarna" },
+  } as Stripe.PaymentIntent);
+  const response = await webhook(
+    "payment_intent.succeeded",
+    stripe.intents.get(intent.id)!,
+    "evt_unsupported_method",
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await PaymentAttempt.findById(attempt!._id))?.status, "failed");
+  assert.equal((await Donation.findById(attempt!.donation))?.status, "pending");
 });
 
 test("verified canceled intent is idempotent and cannot undo a completed donation", async () => {

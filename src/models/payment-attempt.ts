@@ -75,7 +75,7 @@ const schema = new Schema(
     orderId: { type: String, maxlength: 255 },
     paymentId: { type: String, maxlength: 255 },
     captureId: { type: String, maxlength: 255 },
-    actualFundingSource: { type: String, enum: ["paypal", "venmo"], maxlength: 32 },
+    actualFundingSource: { type: String, enum: ["card", "ach", "paypal", "venmo"], maxlength: 32 },
     failure: failureSchema,
     stateHistory: { type: [historySchema], default: [] },
     succeededAt: Date,

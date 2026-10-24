@@ -1,6 +1,6 @@
 # Stripe Phase 4B operations
 
-Phase 4B supports one-time USD donations through Stripe-hosted Checkout. Card Checkout requests `card` and `link`; eligible Apple Pay and Google Pay are rendered by Stripe on supported devices and domains. ACH requests `us_bank_account`. No endpoint collects bank credentials, confirms a payment from the browser, starts a refund, or retries a debit.
+Phase 4B supports one-time USD donations through Stripe-hosted Checkout. With Stripe API version `2026-09-30.endive`, Checkout uses Dashboard-managed dynamic payment methods rather than the deprecated `payment_method_types` request parameter. Configure a Stripe Payment Method Configuration and provide its optional `pmc_...` ID through `STRIPE_PAYMENT_METHOD_CONFIGURATION`. No endpoint collects bank credentials, confirms a payment from the browser, starts a refund, or retries a debit.
 
 ## Test-mode setup
 
@@ -8,7 +8,7 @@ Phase 4B supports one-time USD donations through Stripe-hosted Checkout. Card Ch
 2. Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `payment_intent.processing`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.updated`, and `charge.dispute.closed`.
 3. Put the destination signing secret in `STRIPE_WEBHOOK_SECRET`. Stripe CLI forwarding uses its own temporary `whsec_...`; do not confuse it with the Dashboard destination secret.
 4. Activate cards, Link, wallets, and US bank account payments in the Stripe test account. ACH and Financial Connections availability depend on the account, business location, currency, and Stripe approval.
-5. Set `STRIPE_CARD_ENABLED` and/or `STRIPE_ACH_ENABLED` only after verifying account eligibility. With `STRIPE_FINANCIAL_CONNECTIONS_ENABLED=true`, Checkout requests automatic ACH verification and Financial Connections payment-method permission. With it false, Checkout explicitly uses Stripe-hosted microdeposit verification.
+5. Set `STRIPE_CARD_ENABLED` and/or `STRIPE_ACH_ENABLED` only after verifying account eligibility and the actual methods returned by a test Checkout Session. With `STRIPE_FINANCIAL_CONNECTIONS_ENABLED=true`, Checkout requests automatic ACH verification and Financial Connections payment-method permission. With it false, Checkout explicitly uses Stripe-hosted microdeposit verification.
 6. Run `npm run db:indexes`, using the same replica-set deployment as the API. Review unique-index failures rather than dropping or rebuilding data destructively.
 
 For local webhook work, run the API and use Stripe CLI forwarding to the endpoint above. Use Stripe's current test cards, test bank accounts, microdeposit test amounts/descriptors, failure scenarios, and dispute/refund controls from the Stripe testing documentation; do not copy production credentials into local files. Wallet buttons require Stripe/device/browser/domain eligibility and may not appear in every test browser.
@@ -19,6 +19,8 @@ Required when either Stripe method is enabled:
 
 - `STRIPE_SECRET_KEY`: server-only test/live secret key.
 - `STRIPE_API_VERSION=2026-09-30.endive`: SDK/API contract pinned by this release.
+- `STRIPE_PAYMENT_METHOD_CONFIGURATION`: optional Stripe `pmc_...` fallback ID. If blank, Checkout uses the Stripe Dashboard default configuration.
+- `STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION`, `STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION`: optional per-method `pmc_...` IDs. Use separate sandbox/live configurations when the donor-facing Card and ACH choices must be enforced under dynamic payment methods. Do not enable a method flag unless it is offered by a test Checkout Session.
 - `STRIPE_CHECKOUT_SUCCESS_URL`, `STRIPE_CHECKOUT_CANCEL_URL`: absolute URLs; HTTPS is enforced in production. The success URL may contain `{CHECKOUT_SESSION_ID}` for display/status lookup, never as proof of success.
 - `PAYMENT_STATUS_TOKEN_SECRET`: independent random secret of at least 16 characters for deterministic, unguessable guest status grants.
 

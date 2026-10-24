@@ -67,6 +67,24 @@ function safeFailure(intent: Stripe.PaymentIntent) {
     : undefined;
 }
 
+type StripeFundingSource = "card" | "ach" | "unsupported";
+
+function actualStripeFundingSource(intent: Stripe.PaymentIntent): StripeFundingSource | undefined {
+  const paymentMethod = intent.payment_method;
+  if (!paymentMethod || typeof paymentMethod === "string") return undefined;
+  if (paymentMethod.type === "card") return "card";
+  if (paymentMethod.type === "us_bank_account") return "ach";
+  return "unsupported";
+}
+
+function paymentMethodMismatchFailure() {
+  return {
+    code: "STRIPE_PAYMENT_METHOD_MISMATCH",
+    message: "The completed Stripe payment method did not match the selected checkout method",
+    retryable: false,
+  };
+}
+
 export class StripeEventService {
   constructor(
     private readonly stripe: StripeGateway,
@@ -143,29 +161,31 @@ export class StripeEventService {
     if (session.currency?.toLowerCase() !== "usd")
       throw new AppError(409, "STRIPE_CURRENCY_MISMATCH", "Stripe currency must be USD");
     const paymentId = idOf(session.payment_intent);
-    await this.payments.bindStripeCheckout(metadata.attemptId, {
+    const attempt = await this.payments.bindStripeCheckout(metadata.attemptId, {
       checkoutSessionId: session.id,
       paymentId,
     });
+    if (!attempt) missing("Payment attempt");
     const intent =
       suppliedIntent ??
       (paymentId ? await this.stripe.retrievePaymentIntent(paymentId) : undefined);
-    let status: AttemptStatus = "requires_action";
-    if (session.status === "expired") status = "canceled";
-    else if (session.payment_status === "paid") status = "succeeded";
-    else if (intent?.status === "succeeded") status = "succeeded";
-    else if (intent?.status === "processing") status = "processing";
-    else if (intent?.status === "requires_action")
+    const fundingSource = intent ? actualStripeFundingSource(intent) : undefined;
+    if (fundingSource === "card" || fundingSource === "ach")
+      await this.payments.recordStripeFundingSource(metadata.attemptId, fundingSource);
+    const methodMismatch = Boolean(fundingSource && fundingSource !== attempt.methodFamily);
+    let status: AttemptStatus = methodMismatch ? "failed" : "requires_action";
+    if (!methodMismatch && session.status === "expired") status = "canceled";
+    else if (!methodMismatch && session.payment_status === "paid") status = "succeeded";
+    else if (!methodMismatch && intent?.status === "succeeded") status = "succeeded";
+    else if (!methodMismatch && intent?.status === "processing") status = "processing";
+    else if (!methodMismatch && intent?.status === "requires_action")
       status =
         intent.next_action?.type === "verify_with_microdeposits"
           ? "verification_pending"
           : "requires_action";
-    else if (intent?.status === "canceled") status = "canceled";
-    else if (intent?.status === "requires_payment_method") status = "failed";
-    else if (session.status === "complete")
-      status = session.payment_method_types.includes("us_bank_account")
-        ? "processing"
-        : "requires_action";
+    else if (!methodMismatch && intent?.status === "canceled") status = "canceled";
+    else if (!methodMismatch && intent?.status === "requires_payment_method") status = "failed";
+    else if (!methodMismatch && session.status === "complete") status = "requires_action";
     const reference = paymentId
       ? { field: "paymentId" as const, value: paymentId }
       : { field: "checkoutSessionId" as const, value: session.id };
@@ -180,7 +200,9 @@ export class StripeEventService {
         status,
         providerReference: reference,
         ...(intent ? actualFees(intent) : {}),
-        ...(intent && status === "failed" ? { failure: safeFailure(intent) } : {}),
+        ...(status === "failed"
+          ? { failure: methodMismatch ? paymentMethodMismatchFailure() : intent ? safeFailure(intent) : undefined }
+          : {}),
       }),
     );
   }
@@ -194,9 +216,15 @@ export class StripeEventService {
     const metadata = requiredMetadata(intent.metadata, intent.amount);
     if (intent.currency.toLowerCase() !== "usd")
       throw new AppError(409, "STRIPE_CURRENCY_MISMATCH", "Stripe currency must be USD");
-    await this.payments.bindStripePaymentIntent(metadata.attemptId, intent.id);
+    const attempt = await this.payments.bindStripePaymentIntent(metadata.attemptId, intent.id);
+    const fundingSource = actualStripeFundingSource(intent);
+    if (fundingSource === "card" || fundingSource === "ach")
+      await this.payments.recordStripeFundingSource(metadata.attemptId, fundingSource);
+    const methodMismatch = Boolean(fundingSource && fundingSource !== attempt.methodFamily);
     const status: AttemptStatus =
-      intent.status === "succeeded"
+      methodMismatch
+        ? "failed"
+        : intent.status === "succeeded"
         ? "succeeded"
         : intent.status === "processing"
           ? "processing"
@@ -219,7 +247,9 @@ export class StripeEventService {
         status,
         providerReference: { field: "paymentId", value: intent.id },
         ...actualFees(intent),
-        ...(status === "failed" ? { failure: safeFailure(intent) } : {}),
+        ...(status === "failed"
+          ? { failure: methodMismatch ? paymentMethodMismatchFailure() : safeFailure(intent) }
+          : {}),
       }),
     );
   }

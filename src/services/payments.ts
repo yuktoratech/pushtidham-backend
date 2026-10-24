@@ -246,6 +246,21 @@ export class PaymentService {
     return attempt;
   }
 
+  async recordStripeFundingSource(attemptId: string, fundingSource: "card" | "ach") {
+    const attempt = await PaymentAttempt.findOneAndUpdate(
+      {
+        _id: attemptId,
+        provider: "stripe",
+        $or: [{ actualFundingSource: null }, { actualFundingSource: fundingSource }],
+      },
+      { $set: { actualFundingSource: fundingSource } },
+      { returnDocument: "after", runValidators: true },
+    );
+    if (!attempt)
+      throw new AppError(409, "PROVIDER_IDENTITY_CONFLICT", "Stripe payment method does not match the payment attempt");
+    return attempt;
+  }
+
   async bindPayPalOrder(attemptId: string, orderId: string) {
     const attempt = await PaymentAttempt.findOneAndUpdate(
       { _id: attemptId, provider: "paypal", $or: [{ orderId: null }, { orderId }] },
