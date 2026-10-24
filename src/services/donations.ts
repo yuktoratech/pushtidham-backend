@@ -12,6 +12,8 @@ import {
 import { donationViews } from "./donation-views.js";
 export class DonationService {
   async create(input: DonationInput, actor?: Types.ObjectId, offline = false) {
+    if (!offline)
+      throw new AppError(422, "PAYMENT_METHOD_UNAVAILABLE", "Public donations require Card checkout");
     const designation = await resolveDonationDesignation(input, offline);
     const { title, festivalTitle, donationOptionTitle } = designation;
     const donationPurpose = validateDonationPurpose(input.donationPurpose, designation);
@@ -38,14 +40,9 @@ export class DonationService {
       donationOptionTitle,
       amountCents: input.amountCents,
       currency: "USD" as const,
-      paymentMethod: offline
-        ? ("offline" as const)
-        : "paymentMethod" in input
-          ? input.paymentMethod
-          : ("offline" as const),
-      source: offline ? ("offline" as const) : ("online" as const),
+      paymentMethod: "offline" as const,
+      source: "offline" as const,
       status,
-      bankReference: "bankReference" in input ? input.bankReference : undefined,
       offlineReference:
         "offlineReference" in input ? input.offlineReference : undefined,
       adminNote: "adminNote" in input ? input.adminNote : undefined,

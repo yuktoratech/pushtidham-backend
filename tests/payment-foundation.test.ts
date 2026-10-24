@@ -73,7 +73,7 @@ async function donation(options: { user?: Types.ObjectId; amountCents?: number }
     designationTitle: giving.title,
     amountCents: options.amountCents ?? 2500,
     currency: "USD",
-    paymentMethod: "paypal",
+    paymentMethod: "card",
     status: "pending",
     source: "online",
   });
@@ -199,7 +199,7 @@ test("eligibility preserves Giving amounts and offline Event history; public Eve
   );
 });
 
-test("fee coverage is opt-in, configurable, rounded, capped and limit checked", () => {
+test("Card fee coverage is opt-in, configurable, rounded, capped and limit checked", () => {
   assert.deepEqual(calculateFeeCoverage(100, false), {
     baseDonationCents: 100,
     feeContributionCents: 0,
@@ -217,30 +217,21 @@ test("fee coverage is opt-in, configurable, rounded, capped and limit checked", 
     totalChargeCents: 134,
     estimated: true,
   });
-  const ach = calculateFeeCoverage(100_000, true, {
-    enabled: true,
-    percentageBasisPoints: 80,
-    fixedCents: 0,
-    capCents: 500,
-    bankVerificationCents: 150,
-    includeBankVerificationCost: true,
-  });
-  assert.equal(ach.feeContributionCents, 650);
   assert.throws(
     () => calculateFeeCoverage(1_000_000, true, stripePolicy),
     (error: AppError) => error.code === "TOTAL_AMOUNT_EXCEEDS_LIMIT",
   );
 });
 
-test("guest and donor attempts snapshot identity without email ownership matching", async () => {
+test("guest and donor Card attempts snapshot identity without email ownership matching", async () => {
   const guestDonation = await donation();
   const guest = await payments.prepareAttempt({
     donationId: String(guestDonation._id),
-    provider: "paypal",
-    methodFamily: "paypal",
+    provider: "stripe",
+    methodFamily: "card",
     idempotencyKey: "guest-payment-attempt-0001",
     coverFees: false,
-    providerIdentity: { orderId: "ORDER_GUEST_1" },
+    providerIdentity: { paymentId: "pi_guest_1" },
   });
   assert.ok(guest.statusToken);
   assert.equal(guest.attempt.donorUser, undefined);
@@ -253,6 +244,20 @@ test("guest and donor attempts snapshot identity without email ownership matchin
   assert.equal("idempotencyKey" in status, false);
   assert.equal("statusAccessTokenHash" in status, false);
   await assert.rejects(payments.findGuestAttempt(String(guest.attempt._id), "wrong"));
+  for (const unsupported of [
+    { provider: "stripe" as const, methodFamily: "ach" as const },
+    { provider: "paypal" as const, methodFamily: "paypal" as const },
+  ]) {
+    await assert.rejects(
+      payments.prepareAttempt({
+        donationId: String(guestDonation._id),
+        ...unsupported,
+        idempotencyKey: `unsupported-${unsupported.methodFamily}-attempt`,
+        coverFees: false,
+      }),
+      (error: AppError) => error.code === "PAYMENT_METHOD_UNAVAILABLE",
+    );
+  }
   const user = await User.create({
     name: "Owner",
     email: "payment@example.test",
@@ -290,24 +295,29 @@ test("attempt preparation is idempotent and conflicting reuse is rejected", asyn
   assert.equal(replay.replayed, true);
   await assert.rejects(
     payments.prepareAttempt({ ...input, methodFamily: "ach" }),
-    (error: AppError) => error.code === "IDEMPOTENCY_CONFLICT",
+    (error: AppError) => error.code === "PAYMENT_METHOD_UNAVAILABLE",
   );
 });
 
-test("ACH verification and processing are pending until verified success", async () => {
+test("no ACH or alternate-provider attempt can be persisted for a new donation", async () => {
   const source = await donation();
-  const { attempt } = await attemptFor(source, { methodFamily: "ach", suffix: "ach" });
-  await payments.applyVerifiedEvent(verified(attempt, "verification_pending", "evt_ach_verify"));
+  for (const unsupported of [
+    { provider: "stripe" as const, methodFamily: "ach" as const },
+    { provider: "paypal" as const, methodFamily: "paypal" as const },
+    { provider: "stripe" as const, methodFamily: "venmo" as const },
+  ]) {
+    await assert.rejects(
+      payments.prepareAttempt({
+        donationId: String(source._id),
+        ...unsupported,
+        idempotencyKey: `blocked-${unsupported.methodFamily}-attempt-0001`,
+        coverFees: false,
+      }),
+      (error: AppError) => error.code === "PAYMENT_METHOD_UNAVAILABLE",
+    );
+  }
+  assert.equal(await PaymentAttempt.countDocuments({ donation: source._id }), 0);
   assert.equal((await Donation.findById(source._id))?.status, "pending");
-  await payments.applyVerifiedEvent(verified(attempt, "processing", "evt_ach_processing"));
-  assert.equal((await Donation.findById(source._id))?.status, "pending");
-  await payments.applyVerifiedEvent(
-    verified(attempt, "succeeded", "evt_ach_success", { actualProviderFeeCents: 20 }),
-  );
-  const completed = await Donation.findById(source._id);
-  assert.equal(completed?.status, "completed");
-  assert.equal(completed?.actualProviderFeeCents, 20);
-  assert.equal(completed?.netProceedsCents, 2480);
 });
 
 test("out-of-order events do not regress success and duplicate success is idempotent", async () => {

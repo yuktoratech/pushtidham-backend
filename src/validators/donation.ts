@@ -19,21 +19,6 @@ const fields = {
 };
 const references = (v: { type: string; giving?: string; event?: string }) =>
   v.type === "general" ? !!v.giving && !v.event : Boolean(v.event) !== Boolean(v.giving);
-export const onlineBody = z
-  .object({
-    ...fields,
-    paymentMethod: z.enum(["paypal", "bank_transfer"]),
-    bankReference: z.string().trim().max(200).optional(),
-  })
-  .strict()
-  .refine(references, {
-    path: ["type"],
-    message: "General requires Giving; Event requires exactly one scheduled Event or Utsav option",
-  })
-  .refine((v) => v.paymentMethod === "bank_transfer" || !v.bankReference, {
-    path: ["bankReference"],
-    message: "Only bank transfers accept a bank reference",
-  });
 export const offlineBody = z
   .object({
     ...fields,
@@ -81,8 +66,7 @@ export const financialReportQuery = z.object({
   type: z.enum(donationTypes).optional(),
   status: z.enum(statuses).optional(),
 }).strict().refine((v)=>!v.from||!v.to||new Date(v.from)<=new Date(v.to),{path:["to"],message:"Invalid date range"});
-export type DonationInput =
-  z.infer<typeof onlineBody> | z.infer<typeof offlineBody>;
+export type DonationInput = z.infer<typeof offlineBody>;
 export type DonationQuery = z.infer<typeof donationQuery>;
 export type DonationExportQuery = z.infer<typeof donationExportQuery>;
 export type FinancialReportQuery = z.infer<typeof financialReportQuery>;

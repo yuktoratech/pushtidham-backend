@@ -29,21 +29,14 @@ const config = loadConfig({
   JWT_REFRESH_EXPIRES_IN: "7d",
   STRIPE_SECRET_KEY: "sk_test_mock_phase_4b_key",
   STRIPE_WEBHOOK_SECRET: "whsec_mock_phase_4b_secret",
-  STRIPE_PAYMENT_METHOD_CONFIGURATION: "pmc_mockphase4bconfiguration",
   STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION: "pmc_mockcardconfiguration",
-  STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION: "pmc_mockachconfiguration",
   STRIPE_CHECKOUT_SUCCESS_URL:
     "http://localhost:3000/donation-confirmation?session_id={CHECKOUT_SESSION_ID}",
   STRIPE_CHECKOUT_CANCEL_URL: "http://localhost:3000/checkout?canceled=1",
   STRIPE_CARD_ENABLED: "true",
-  STRIPE_ACH_ENABLED: "true",
-  STRIPE_FINANCIAL_CONNECTIONS_ENABLED: "true",
   PAYMENT_STATUS_TOKEN_SECRET: randomBytes(40).toString("hex"),
   STRIPE_CARD_FEE_BPS: "290",
   STRIPE_CARD_FEE_FIXED_CENTS: "30",
-  STRIPE_ACH_FEE_BPS: "80",
-  STRIPE_ACH_FEE_FIXED_CENTS: "0",
-  STRIPE_ACH_FEE_CAP_CENTS: "500",
   STRIPE_RECONCILIATION_MIN_AGE_MINUTES: "5",
   STRIPE_RECONCILIATION_BATCH_SIZE: "10",
 });
@@ -54,6 +47,7 @@ class MockStripe implements StripeGateway {
   charges = new Map<string, Stripe.Charge>();
   byIdempotency = new Map<string, Stripe.Checkout.Session>();
   lastParams?: Stripe.Checkout.SessionCreateParams;
+  sessionMethods?: string[];
   event?: Stripe.Event;
   createCalls = 0;
 
@@ -94,7 +88,7 @@ class MockStripe implements StripeGateway {
       payment_intent: paymentId,
       payment_status: "unpaid",
       status: "open",
-      payment_method_types: [method],
+      payment_method_types: this.sessionMethods ?? [method],
     } as unknown as Stripe.Checkout.Session;
     this.sessions.set(session.id, session);
     this.byIdempotency.set(idempotencyKey, session);
@@ -279,12 +273,19 @@ test("Checkout uses the selected Dashboard payment configuration instead of depr
   const card = await checkout();
   assert.equal(card.status, 201);
   assert.equal(stripe.lastParams?.payment_method_configuration, "pmc_mockcardconfiguration");
+  assert.deepEqual(stripe.lastParams?.adaptive_pricing, { enabled: false });
   assert.equal("payment_method_types" in (stripe.lastParams ?? {}), false);
-  const ach = await checkout({ methodFamily: "ach" }, "selected-ach-configuration-key-0001");
-  assert.equal(ach.status, 201);
-  assert.equal(stripe.lastParams?.payment_method_configuration, "pmc_mockachconfiguration");
-  assert.equal("payment_method_types" in (stripe.lastParams ?? {}), false);
-  assert.equal(stripe.createCalls, 2);
+  assert.equal(stripe.createCalls, 1);
+});
+
+test("Checkout refuses a provider session that exposes another payment method", async () => {
+  stripe.sessionMethods = ["card", "link"];
+  const response = await checkout({}, "card-only-session-guard-key-0001");
+  assert.equal(response.status, 502);
+  assert.equal(response.body.error.code, "STRIPE_SESSION_MISMATCH");
+  assert.equal(stripe.lastParams?.payment_method_configuration, "pmc_mockcardconfiguration");
+  assert.equal(await PaymentAttempt.countDocuments(), 1);
+  assert.equal((await Donation.findOne())?.status, "pending");
 });
 
 test("informational Events cannot start online Stripe checkout", async () => {
@@ -395,14 +396,14 @@ test("card failure and authoritative amount mismatches never complete a donation
 });
 
 test("a trusted Stripe payment-method mismatch never completes the selected donation", async () => {
-  const created = await checkout({ methodFamily: "ach" }, "ach-method-mismatch-key-0001");
+  const created = await checkout({}, "card-method-mismatch-key-0001");
   const attempt = await PaymentAttempt.findById(created.body.data.attemptId);
   const intent = stripe.intents.get(attempt!.paymentId!)!;
   stripe.intents.set(intent.id, {
     ...intent,
     status: "succeeded",
     amount_received: intent.amount,
-    payment_method: { id: "pm_card_mismatch", object: "payment_method", type: "card" },
+    payment_method: { id: "pm_bank_mismatch", object: "payment_method", type: "us_bank_account" },
   } as Stripe.PaymentIntent);
   const response = await webhook(
     "payment_intent.succeeded",
@@ -455,58 +456,6 @@ test("verified canceled intent is idempotent and cannot undo a completed donatio
   assert.equal((await Donation.findById(paidAttempt!.donation))?.status, "completed");
 });
 
-test("ACH verification, processing, delayed success, failure and expiry stay provider-controlled", async () => {
-  const created = await checkout({ methodFamily: "ach" });
-  const attempt = await PaymentAttempt.findById(created.body.data.attemptId);
-  const session = stripe.sessions.get(attempt!.checkoutSessionId!)!;
-  setIntentStatus(attempt!.paymentId!, "requires_action", {
-    type: "verify_with_microdeposits",
-    verify_with_microdeposits: {
-      arrival_date: Math.floor(Date.now() / 1000) + 86400,
-      hosted_verification_url: "https://verify.stripe.test",
-      microdeposit_type: "amounts",
-    },
-  } as Stripe.PaymentIntent.NextAction);
-  stripe.sessions.set(session.id, { ...session, status: "complete" } as Stripe.Checkout.Session);
-  await webhook("checkout.session.completed", session, "evt_ach_verify");
-  assert.equal((await PaymentAttempt.findById(attempt!._id))?.status, "verification_pending");
-  assert.equal((await Donation.findById(attempt!.donation))?.status, "pending");
-  setIntentStatus(attempt!.paymentId!, "processing");
-  await webhook(
-    "payment_intent.processing",
-    stripe.intents.get(attempt!.paymentId!)!,
-    "evt_ach_processing",
-  );
-  assert.equal((await Donation.findById(attempt!.donation))?.status, "pending");
-  setIntentStatus(attempt!.paymentId!, "succeeded");
-  await webhook(
-    "payment_intent.succeeded",
-    stripe.intents.get(attempt!.paymentId!)!,
-    "evt_ach_delayed_success",
-  );
-  assert.equal((await Donation.findById(attempt!.donation))?.status, "completed");
-
-  const failed = await checkout({ methodFamily: "ach" }, "ach-failed-checkout-key-0001");
-  const failedAttempt = await PaymentAttempt.findById(failed.body.data.attemptId);
-  setIntentStatus(failedAttempt!.paymentId!, "requires_payment_method");
-  await webhook(
-    "payment_intent.payment_failed",
-    stripe.intents.get(failedAttempt!.paymentId!)!,
-    "evt_ach_failed",
-  );
-  assert.equal((await PaymentAttempt.findById(failedAttempt!._id))?.status, "failed");
-
-  const expired = await checkout({ methodFamily: "ach" }, "ach-expired-checkout-key-0001");
-  const expiredAttempt = await PaymentAttempt.findById(expired.body.data.attemptId);
-  const expiredSession = stripe.sessions.get(expiredAttempt!.checkoutSessionId!)!;
-  stripe.sessions.set(expiredSession.id, {
-    ...expiredSession,
-    status: "expired",
-  } as Stripe.Checkout.Session);
-  await webhook("checkout.session.expired", expiredSession, "evt_ach_expired");
-  assert.equal((await PaymentAttempt.findById(expiredAttempt!._id))?.status, "canceled");
-});
-
 test("reconciliation applies missing success without retrying or creating a charge", async () => {
   const created = await checkout();
   const attempt = await PaymentAttempt.findById(created.body.data.attemptId);
@@ -529,7 +478,7 @@ test("reconciliation applies missing success without retrying or creating a char
   assert.equal((await Donation.findById(attempt!.donation))?.status, "completed");
 });
 
-test("verified refunds, disputes, ACH returns and reversals are durable and deduplicated", async () => {
+test("verified card refunds, disputes and reversals are durable and deduplicated", async () => {
   const card = await checkout({}, "adjustment-card-checkout-key-0001");
   const cardAttempt = await PaymentAttempt.findById(card.body.data.attemptId);
   setIntentStatus(cardAttempt!.paymentId!, "succeeded");
@@ -582,49 +531,4 @@ test("verified refunds, disputes, ACH returns and reversals are durable and dedu
   );
   assert.equal(await PaymentAdjustment.countDocuments({ type: "dispute" }), 1);
   assert.equal(await PaymentAdjustment.countDocuments({ type: "reversal" }), 1);
-
-  const ach = await checkout(
-    { methodFamily: "ach" },
-    "adjustment-ach-checkout-key-0001",
-  );
-  const achAttempt = await PaymentAttempt.findById(ach.body.data.attemptId);
-  setIntentStatus(achAttempt!.paymentId!, "succeeded");
-  const achIntent = stripe.intents.get(achAttempt!.paymentId!)!;
-  await webhook("payment_intent.succeeded", achIntent, "evt_adjustment_ach_success");
-  const achCharge = {
-    id: "ch_ach_return",
-    object: "charge",
-    payment_intent: achIntent.id,
-    refunds: { object: "list", data: [], has_more: false, url: "/v1/refunds" },
-  } as unknown as Stripe.Charge;
-  stripe.charges.set(achCharge.id, achCharge);
-  const achDispute = {
-    id: "dp_ach_return_1",
-    object: "dispute",
-    charge: achCharge.id,
-    amount: achIntent.amount,
-    status: "lost",
-    reason: "insufficient_funds",
-    created: Math.floor(Date.now() / 1000),
-  } as unknown as Stripe.Dispute;
-  assert.equal(
-    (await webhook("charge.dispute.closed", achDispute, "evt_ach_return")).status,
-    200,
-  );
-  assert.equal(await PaymentAdjustment.countDocuments({ type: "ach_return" }), 1);
-});
-
-test("legacy bank transfer and offline contracts remain unchanged", async () => {
-  const legacy = await request(app).post("/api/v1/donations").send({
-    donorName: "Legacy Donor",
-    donorEmail: "legacy@example.test",
-    type: "general",
-    giving: fixedGiving,
-    amountCents: 2500,
-    paymentMethod: "bank_transfer",
-    bankReference: "legacy-reference",
-  });
-  assert.equal(legacy.status, 201);
-  assert.equal(legacy.body.data.paymentMethod, "bank_transfer");
-  assert.equal(legacy.body.data.status, "pending");
 });

@@ -37,7 +37,7 @@ export type PreparePaymentAttempt = {
 };
 
 export type PrepareNewDonationAttempt = {
-  provider: "stripe" | "paypal";
+  provider: "stripe";
   donorName: string;
   donorEmail: string;
   donorPhone?: string;
@@ -47,7 +47,7 @@ export type PrepareNewDonationAttempt = {
   designationTitle: string;
   donationPurpose?: string;
   amountCents: number;
-  methodFamily: "card" | "ach" | "paypal";
+  methodFamily: "card";
   idempotencyKey: string;
   requestFingerprint: string;
   coverFees: boolean;
@@ -76,10 +76,6 @@ function sameId(left: unknown, right: string) {
 export class PaymentService {
   async prepareNewStripeDonationAttempt(input: Omit<PrepareNewDonationAttempt, "provider">) {
     return this.prepareNewDonationAttempt({ ...input, provider: "stripe" });
-  }
-
-  async prepareNewPayPalDonationAttempt(input: Omit<PrepareNewDonationAttempt, "provider" | "methodFamily">) {
-    return this.prepareNewDonationAttempt({ ...input, provider: "paypal", methodFamily: "paypal" });
   }
 
   private async prepareNewDonationAttempt(input: PrepareNewDonationAttempt) {
@@ -261,32 +257,9 @@ export class PaymentService {
     return attempt;
   }
 
-  async bindPayPalOrder(attemptId: string, orderId: string) {
-    const attempt = await PaymentAttempt.findOneAndUpdate(
-      { _id: attemptId, provider: "paypal", $or: [{ orderId: null }, { orderId }] },
-      { $set: { orderId } },
-      { returnDocument: "after", runValidators: true },
-    );
-    if (!attempt) throw new AppError(409, "PROVIDER_IDENTITY_CONFLICT", "PayPal order does not match the payment attempt");
-    if (attempt.status === "created")
-      await PaymentAttempt.updateOne(
-        { _id: attempt._id, status: "created" },
-        { $set: { status: "requires_action" }, $push: { stateHistory: { status: "requires_action", occurredAt: new Date() } } },
-      );
-    return PaymentAttempt.findById(attempt._id);
-  }
-
-  async bindPayPalCapture(attemptId: string, captureId: string, fundingSource: "paypal" | "venmo") {
-    const attempt = await PaymentAttempt.findOneAndUpdate(
-      { _id: attemptId, provider: "paypal", $or: [{ captureId: null }, { captureId }] },
-      { $set: { captureId, actualFundingSource: fundingSource } },
-      { returnDocument: "after", runValidators: true },
-    );
-    if (!attempt) throw new AppError(409, "PROVIDER_IDENTITY_CONFLICT", "PayPal capture does not match the payment attempt");
-    return attempt;
-  }
-
   async prepareAttempt(input: PreparePaymentAttempt) {
+    if (input.provider !== "stripe" || input.methodFamily !== "card")
+      throw new AppError(422, "PAYMENT_METHOD_UNAVAILABLE", "Only Card payment attempts may be created");
     if (!/^[A-Za-z0-9._:-]{16,255}$/.test(input.idempotencyKey))
       throw new AppError(
         400,
@@ -411,14 +384,6 @@ export class PaymentService {
     });
     if (!attempt) missing("Payment attempt");
     return this.statusView(attempt);
-  }
-
-  async requirePayPalCaptureAccess(orderId: string, actorId?: Types.ObjectId, statusToken?: string) {
-    const attempt = await PaymentAttempt.findOne({ provider: "paypal", orderId }).select("+statusAccessTokenHash");
-    if (!attempt) missing("PayPal payment attempt");
-    if (actorId && attempt.donorUser && sameId(attempt.donorUser, String(actorId))) return attempt;
-    if (!actorId && !attempt.donorUser && statusToken && attempt.statusAccessTokenHash === digest(statusToken)) return attempt;
-    throw new AppError(403, "FORBIDDEN", "PayPal capture access denied");
   }
 
   private statusView(attempt: InstanceType<typeof PaymentAttempt>) {

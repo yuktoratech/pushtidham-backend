@@ -77,46 +77,18 @@ const schema = z
     STRIPE_SECRET_KEY: optionalSecret,
     STRIPE_WEBHOOK_SECRET: optionalSecret,
     STRIPE_API_VERSION: z.literal("2026-09-30.endive").default("2026-09-30.endive"),
-    STRIPE_PAYMENT_METHOD_CONFIGURATION: z
-      .union([z.literal(""), z.string().regex(/^pmc_[A-Za-z0-9]+$/)])
-      .optional()
-      .transform((v) => v || undefined),
     STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION: z
-      .union([z.literal(""), z.string().regex(/^pmc_[A-Za-z0-9]+$/)])
-      .optional()
-      .transform((v) => v || undefined),
-    STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION: z
       .union([z.literal(""), z.string().regex(/^pmc_[A-Za-z0-9]+$/)])
       .optional()
       .transform((v) => v || undefined),
     STRIPE_CHECKOUT_SUCCESS_URL: optionalUrl,
     STRIPE_CHECKOUT_CANCEL_URL: optionalUrl,
     STRIPE_CARD_ENABLED: boolean,
-    STRIPE_ACH_ENABLED: boolean,
-    STRIPE_FINANCIAL_CONNECTIONS_ENABLED: boolean,
     PAYMENT_STATUS_TOKEN_SECRET: optionalSecret,
     STRIPE_CARD_FEE_BPS: z.coerce.number().int().min(0).max(9999).optional(),
     STRIPE_CARD_FEE_FIXED_CENTS: z.coerce.number().int().min(0).optional(),
-    STRIPE_ACH_FEE_BPS: z.coerce.number().int().min(0).max(9999).optional(),
-    STRIPE_ACH_FEE_FIXED_CENTS: z.coerce.number().int().min(0).optional(),
-    STRIPE_ACH_FEE_CAP_CENTS: z.coerce.number().int().min(0).optional(),
-    STRIPE_ACH_VERIFICATION_CENTS: z.coerce.number().int().min(0).optional(),
-    STRIPE_ACH_COVER_VERIFICATION_COST: boolean,
     STRIPE_RECONCILIATION_MIN_AGE_MINUTES: z.coerce.number().int().min(5).max(10080).default(60),
     STRIPE_RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
-    PAYPAL_CLIENT_ID: optionalSecret,
-    PAYPAL_CLIENT_SECRET: optionalSecret,
-    PAYPAL_ENVIRONMENT: z.enum(["sandbox", "live"]).default("sandbox"),
-    PAYPAL_WEBHOOK_ID: optionalSecret,
-    PAYPAL_RETURN_URL: optionalUrl,
-    PAYPAL_CANCEL_URL: optionalUrl,
-    PAYPAL_ENABLED: boolean,
-    PAYPAL_VENMO_ENABLED: boolean,
-    PAYPAL_MERCHANT_ID: z.string().trim().min(3).max(255).optional(),
-    PAYPAL_FEE_BPS: z.coerce.number().int().min(0).max(9999).optional(),
-    PAYPAL_FEE_FIXED_CENTS: z.coerce.number().int().min(0).optional(),
-    PAYPAL_RECONCILIATION_MIN_AGE_MINUTES: z.coerce.number().int().min(5).max(10080).default(60),
-    PAYPAL_RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
   })
   .superRefine((v, c) => {
     if (v.JWT_ACCESS_SECRET === v.JWT_REFRESH_SECRET)
@@ -210,10 +182,11 @@ const schema = z
         path: ["R2_PUBLIC_BASE_URL"],
         message: "Production image storage requires HTTPS",
       });
-    const stripeEnabled = v.STRIPE_CARD_ENABLED || v.STRIPE_ACH_ENABLED;
+    const stripeEnabled = v.STRIPE_CARD_ENABLED;
     if (stripeEnabled) {
       for (const key of [
         "STRIPE_SECRET_KEY",
+        "STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION",
         "STRIPE_CHECKOUT_SUCCESS_URL",
         "STRIPE_CHECKOUT_CANCEL_URL",
         "PAYMENT_STATUS_TOKEN_SECRET",
@@ -232,20 +205,6 @@ const schema = z
         path: ["STRIPE_CHECKOUT_SUCCESS_URL"],
         message: "Production Stripe redirects require HTTPS",
       });
-    if (v.PAYPAL_ENABLED) {
-      for (const key of [
-        "PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET", "PAYPAL_WEBHOOK_ID",
-        "PAYPAL_RETURN_URL", "PAYPAL_CANCEL_URL", "PAYPAL_MERCHANT_ID",
-        "PAYMENT_STATUS_TOKEN_SECRET",
-      ] as const)
-        if (!v[key])
-          c.addIssue({ code: "custom", path: [key], message: "Required when PayPal is enabled" });
-    }
-    if (
-      v.NODE_ENV === "production" && v.PAYPAL_ENABLED &&
-      (!v.PAYPAL_RETURN_URL?.startsWith("https://") || !v.PAYPAL_CANCEL_URL?.startsWith("https://"))
-    )
-      c.addIssue({ code: "custom", path: ["PAYPAL_RETURN_URL"], message: "Production PayPal redirects require HTTPS" });
   });
 export function loadConfig(input: NodeJS.ProcessEnv = process.env) {
   const result = schema.safeParse(input);

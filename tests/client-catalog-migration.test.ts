@@ -33,7 +33,7 @@ beforeEach(async()=>{
   await db.collection("givings").createIndex({slug:1},{unique:true});
   for(const [name,count] of Object.entries({events:7,donations:2,users:4})) await db.collection(name).insertMany(Array.from({length:count},(_,i)=>({fixture:i,amountCents:25000})));
 });
-test("atomic apply, private backup, preserved other collections and duplicate-free retry",async()=>{
+test("atomic apply, private backup, preserved other collections and duplicate-free retry",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   const db=client.db(DATABASE);
   const protectedBefore=await Promise.all(["events","donations","users"].map(async name=>BSON.EJSON.stringify(await db.collection(name).find({}).toArray())));
   assert.deepEqual(await applyCatalog(client,options()),{status:"applied",updates:7,inserts:16});
@@ -46,7 +46,11 @@ test("atomic apply, private backup, preserved other collections and duplicate-fr
   assert.equal((await applyCatalog(client,options()))?.status,"already-applied");assert.equal(await snapshot(),applied);
   assert.deepEqual(await Promise.all(["events","donations","users"].map(async name=>BSON.EJSON.stringify(await db.collection(name).find({}).toArray()))),protectedBefore);
 });
-test("wrong confirmation, database and host refuse writes",async()=>{
+test("Windows refuses migration writes when private ACL verification cannot be established",{skip:process.platform !== "win32"},async()=>{
+  const before=await snapshot();
+  await assert.rejects(applyCatalog(client,options()),/Backup directory must be private/);
+  assert.equal(await snapshot(),before);
+});test("wrong confirmation, database and host refuse writes",async()=>{
   const before=await snapshot();
   for(const change of [{confirmation:"no"},{database:"production"},{host:"other.mongodb.net"}]) await assert.rejects(applyCatalog(client,{...options(),...change}));
   assert.equal(await snapshot(),before);
@@ -60,7 +64,7 @@ test("current-value drift and occupied addition abort before backup",async()=>{
   await collection.insertOne({slug:"mahaprasad-manorathi"});
   await assert.rejects(applyCatalog(client,options()),/exactly 9/);
 });
-test("failure after updates aborts transaction; durable backup supports safe resume",async()=>{
+test("failure after updates aborts transaction; durable backup supports safe resume",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   const before=await snapshot();
   const failure=mock.method(Collection.prototype,"insertMany",async()=>{throw new Error("isolated injected failure");});
   await assert.rejects(applyCatalog(client,options()),/isolated injected failure/);failure.mock.restore();
@@ -68,7 +72,7 @@ test("failure after updates aborts transaction; durable backup supports safe res
   assert.equal((await rollback())?.status,"not-applied");
   assert.equal((await applyCatalog(client,options()))?.status,"applied");
 });
-test("rollback restores originals exactly and retains referenced additions inactive",async()=>{
+test("rollback restores originals exactly and retains referenced additions inactive",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   const db=client.db(DATABASE), originals=await db.collection("givings").find({}).sort({_id:1}).toArray();
   await applyCatalog(client,options());
   const added=await db.collection("givings").findOne({slug:"mahaprasad-manorathi"});assert.ok(added);
@@ -82,20 +86,24 @@ test("rollback restores originals exactly and retains referenced additions inact
   assert.equal((await rollback())?.status,"already-rolled-back");
   await assert.rejects(applyCatalog(client,options()),/partial\/unknown state/);
 });
-test("post-apply catalog edits block rollback; missing or insecure backup refuses writes",async()=>{
+test("post-apply catalog edits block rollback; missing or insecure backup refuses writes",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   await assert.rejects(rollback(),/backup is required/);
   await applyCatalog(client,options());
   await client.db(DATABASE).collection("givings").updateOne({slug:"mangla-seva"},{$set:{description:"New admin edit"}});
   const before=await snapshot();await assert.rejects(rollback(),/post-migration edits/);assert.equal(await snapshot(),before);
   await chmod(backupFile,0o644);await assert.rejects(rollback(),/private file/);assert.equal(await snapshot(),before);
 });
-test("unsafe backup directory and missing unique index fail closed",async()=>{
+test("unsafe backup directory fails closed",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   await chmod(join(backupFile,".."),0o755);
   const before=await snapshot();await assert.rejects(applyCatalog(client,options()),/directory must be private/);assert.equal(await snapshot(),before);
-  await client.db(DATABASE).collection("givings").dropIndex("slug_1");
-  await assert.rejects(applyCatalog(client,options()),/unique Giving slug index/);
 });
-test("lost commit acknowledgement recovers without duplicate writes",async()=>{
+test("missing unique Giving slug index fails before migration",async()=>{
+  await client.db(DATABASE).collection("givings").dropIndex("slug_1");
+  const before=await snapshot();
+  await assert.rejects(applyCatalog(client,options()),/unique Giving slug index/);
+  assert.equal(await snapshot(),before);
+});
+test("lost commit acknowledgement recovers without duplicate writes",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   const original=ClientSession.prototype.withTransaction;
   const failure=mock.method(ClientSession.prototype,"withTransaction",async function(this:ClientSession,...args:Parameters<typeof original>){
     await original.apply(this,args);throw new Error("isolated lost acknowledgement");
@@ -104,7 +112,7 @@ test("lost commit acknowledgement recovers without duplicate writes",async()=>{
   assert.equal(await client.db(DATABASE).collection("givings").countDocuments(),25);
   const before=await snapshot();assert.equal((await applyCatalog(client,options()))?.status,"already-applied");assert.equal(await snapshot(),before);
 });
-test("corrupt manifest and protected collection drift refuse writes",async()=>{
+test("corrupt manifest and protected collection drift refuse writes",{skip:process.platform === "win32" && "POSIX private-mode migration fixture is not portable to Windows ACLs"},async()=>{
   await client.db(DATABASE).collection("events").insertOne({fixture:"drift"});
   const initial=await snapshot();await assert.rejects(applyCatalog(client,options()),/Unexpected events count/);assert.equal(await snapshot(),initial);
   await client.db(DATABASE).collection("events").deleteOne({fixture:"drift"});

@@ -21,8 +21,7 @@
     "seed:tentative-events": "tsx scripts/seed-tentative-events.ts",
     "seed:atlas-catalog": "tsx scripts/seed-atlas-catalog.ts",
     "db:indexes": "tsx scripts/indexes.ts",
-    "payments:reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
-    "payments:reconcile:paypal": "tsx scripts/reconcile-paypal.ts"
+    "payments:reconcile:stripe": "tsx scripts/reconcile-stripe.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1152.0",

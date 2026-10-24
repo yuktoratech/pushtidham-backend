@@ -25,22 +25,17 @@ import {
   imageUploadQuery,
 } from "../validators/catalog.js";
 import {
-  onlineBody,
   offlineBody,
   donationQuery,
   donationExportQuery,
   statusBody,
   financialReportQuery,
 } from "../validators/donation.js";
-import { stripeCheckoutBody, paypalOrderBody, paypalCaptureBody, paypalOrderParams } from "../validators/payments.js";
+import { stripeCheckoutBody } from "../validators/payments.js";
 import type { StripeGateway } from "../services/stripe-gateway.js";
 import { StripeCheckoutService } from "../services/stripe-checkout.js";
 import { StripeEventService } from "../services/stripe-events.js";
 import { stripeController } from "../controllers/stripe.js";
-import type { PayPalGateway } from "../services/paypal-gateway.js";
-import { PayPalOrderService } from "../services/paypal-orders.js";
-import { PayPalEventService } from "../services/paypal-events.js";
-import { paypalController } from "../controllers/paypal.js";
 import { paymentCapabilitiesController } from "../controllers/payment-capabilities.js";
 import { financialReportController } from "../controllers/financial-reports.js";
 import {ReceiptService} from "../services/receipts.js";
@@ -55,7 +50,6 @@ export function routes(
   config: Config,
   dependencies: {
     stripe?: StripeGateway;
-    paypal?: PayPalGateway;
     images?: ImageStorage;
     mail?: MailSender;
   } = {},
@@ -80,19 +74,13 @@ export function routes(
     stripeCheckout,
     stripeEvents,
   );
-  const paypalOrders = dependencies.paypal ? new PayPalOrderService(config, dependencies.paypal) : undefined;
-  const paypalEvents = dependencies.paypal && config.PAYPAL_MERCHANT_ID ? new PayPalEventService(dependencies.paypal, config.PAYPAL_MERCHANT_ID) : undefined;
-  const paypal = paypalController(config, dependencies.paypal, paypalOrders, paypalEvents);
   router.get("/health", health);
   const publicCategories = givingCategoryController(catalog);
   router.get("/giving-categories", validate({query: givingCategoryQuery}), publicCategories.list);
   router.get("/giving-categories/:slug", validate({params: slugParams}), publicCategories.get);
   router.get(
     "/payments/capabilities",
-    paymentCapabilitiesController(config, {
-      stripe: Boolean(dependencies.stripe),
-      paypal: Boolean(dependencies.paypal),
-    }),
+    paymentCapabilitiesController(config, Boolean(dependencies.stripe)),
   );
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -143,7 +131,6 @@ export function routes(
     res.status(202).json({success: true, data: null});
   });
   router.post("/webhooks/stripe", stripe.webhook);
-  router.post("/webhooks/paypal", paypal.webhook);
   router.post(
     "/payments/stripe/checkout-sessions",
     authenticate(auth, true),
@@ -156,8 +143,6 @@ export function routes(
     validate({ params: idParams }),
     stripe.status,
   );
-  router.post("/payments/paypal/orders", authenticate(auth, true), validate({ body: paypalOrderBody }), paypal.create);
-  router.post("/payments/paypal/orders/:orderId/capture", authenticate(auth, true), validate({ params: paypalOrderParams, body: paypalCaptureBody }), paypal.capture);
   for (const kind of ["giving", "event"] as const) {
     const path = kind === "giving" ? "giving" : "events";
     const c = catalogController(catalog, kind);
@@ -213,12 +198,6 @@ export function routes(
     images.remove,
   );
   const d = donationController(donations);
-  router.post(
-    "/donations",
-    authenticate(auth, true),
-    validate({ body: onlineBody }),
-    d.create,
-  );
   router.get(
     "/donations",
     authenticate(auth),

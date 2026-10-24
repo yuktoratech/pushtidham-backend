@@ -170,6 +170,8 @@ export class StripeEventService {
       suppliedIntent ??
       (paymentId ? await this.stripe.retrievePaymentIntent(paymentId) : undefined);
     const fundingSource = intent ? actualStripeFundingSource(intent) : undefined;
+    if ((session.payment_status === "paid" || intent?.status === "succeeded") && !fundingSource)
+      throw new AppError(409, "STRIPE_PAYMENT_METHOD_UNVERIFIED", "Stripe payment method is not verified");
     if (fundingSource === "card" || fundingSource === "ach")
       await this.payments.recordStripeFundingSource(metadata.attemptId, fundingSource);
     const methodMismatch = Boolean(fundingSource && fundingSource !== attempt.methodFamily);
@@ -218,6 +220,8 @@ export class StripeEventService {
       throw new AppError(409, "STRIPE_CURRENCY_MISMATCH", "Stripe currency must be USD");
     const attempt = await this.payments.bindStripePaymentIntent(metadata.attemptId, intent.id);
     const fundingSource = actualStripeFundingSource(intent);
+    if (intent.status === "succeeded" && !fundingSource)
+      throw new AppError(409, "STRIPE_PAYMENT_METHOD_UNVERIFIED", "Stripe payment method is not verified");
     if (fundingSource === "card" || fundingSource === "ach")
       await this.payments.recordStripeFundingSource(metadata.attemptId, fundingSource);
     const methodMismatch = Boolean(fundingSource && fundingSource !== attempt.methodFamily);

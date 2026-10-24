@@ -66,18 +66,14 @@ test("Giving membership validates IDs, amounts, filtering and safe category dele
  const mixed=await service.createGiving(givingBody.parse({title:"Mixed",slug:"mixed",categoryId,amountType:"fixed_and_custom",fixedAmountsCents:[2500]}));
  assert.ok(await resolveDonationDesignation({type:"general",giving:String(mixed._id),amountCents:6700}));
 });
-test("Other requires a trimmed purpose for online and offline donations while existing Giving stays optional",async()=>{
+test("Other purpose remains validated for offline donations; removed public routes cannot create online donations",async()=>{
  const category=await GivingCategory.create({name:"General Donation",slug:"general-donation",status:"active"});
  const other=await Giving.create({title:"Other",slug:"other",categoryId:category._id,category:"general",amountType:"custom",fixedAmountsCents:[],status:"active"});
  const body={donorName:"Fixture Donor",donorEmail:"fixture@example.test",type:"general",giving:String(other._id),amountCents:100,currency:"USD"};
- const missing=await request(app).post("/api/v1/donations").send({...body,paymentMethod:"bank_transfer"});
- assert.equal(missing.status,422);
- assert.equal((await request(app).post("/api/v1/donations").send({...body,amountCents:99,donationPurpose:"Support",paymentMethod:"bank_transfer"})).status,400);
- assert.equal((await request(app).post("/api/v1/donations").send({...body,amountCents:1000001,donationPurpose:"Support",paymentMethod:"bank_transfer"})).status,400);
- assert.equal((await request(app).post("/api/v1/donations").send({...body,donationPurpose:"x".repeat(501),paymentMethod:"bank_transfer"})).status,400);
- const guest=await request(app).post("/api/v1/donations").send({...body,donationPurpose:"  Guest purpose  ",paymentMethod:"bank_transfer"});
- assert.equal(guest.status,201);
- assert.equal(guest.body.data.donationPurpose,"Guest purpose");
+ for (const purpose of [undefined,"Support","  Guest purpose  "]) {
+  const response=await request(app).post("/api/v1/donations").send({...body,donationPurpose:purpose,paymentMethod:"card"});
+  assert.equal(response.status,404);
+ }
  const blank=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,donationPurpose:"   "});
  assert.ok(blank.status>=400);
  const saved=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,donationPurpose:"  Community support  "});

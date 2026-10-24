@@ -11,7 +11,6 @@ import { AppError } from "./utils/errors.js";
 import { log } from "./utils/logger.js";
 import type { StripeGateway } from "./services/stripe-gateway.js";
 import { StripeSdkGateway } from "./services/stripe-gateway.js";
-import { PayPalHttpGateway, type PayPalGateway } from "./services/paypal-gateway.js";
 import {
   createImageStorage,
   type ImageStorage,
@@ -21,7 +20,6 @@ export function createApp(
   config: Config,
   dependencies: {
     stripe?: StripeGateway;
-    paypal?: PayPalGateway;
     images?: ImageStorage;
     mail?: MailSender;
   } = {},
@@ -58,10 +56,6 @@ export function createApp(
     }),
   );
   app.use(
-    "/api/v1/webhooks/paypal",
-    express.raw({ type: "application/json", limit: "1mb" }),
-  );
-  app.use(
     rateLimit({
       windowMs: 60000,
       limit: 120,
@@ -84,10 +78,9 @@ export function createApp(
     (config.STRIPE_SECRET_KEY
       ? new StripeSdkGateway(config.STRIPE_SECRET_KEY, config.STRIPE_API_VERSION)
       : undefined);
-  const paypal = dependencies.paypal ?? (config.PAYPAL_ENABLED ? new PayPalHttpGateway(config) : undefined);
   const images = dependencies.images ?? createImageStorage(config);
   const mail = dependencies.mail ?? (hasSmtpConfig(config) ? new SmtpMailSender(config) : undefined);
-  app.use("/api/v1", routes(config, { stripe, paypal, images, mail }));
+  app.use("/api/v1", routes(config, { stripe, images, mail }));
   app.use((_req, _res, next) =>
     next(new AppError(404, "NOT_FOUND", "Route not found")),
   );

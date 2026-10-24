@@ -9,8 +9,7 @@ import { PaymentService } from "./payments.js";
 import type { StripeGateway } from "./stripe-gateway.js";
 import type { Types } from "mongoose";
 
-function feePolicy(config: Config, method: "card" | "ach"): FeePolicy | undefined {
-  if (method === "card") {
+function feePolicy(config: Config): FeePolicy | undefined {
     if (config.STRIPE_CARD_FEE_BPS === undefined || config.STRIPE_CARD_FEE_FIXED_CENTS === undefined)
       return undefined;
     return {
@@ -18,17 +17,6 @@ function feePolicy(config: Config, method: "card" | "ach"): FeePolicy | undefine
       percentageBasisPoints: config.STRIPE_CARD_FEE_BPS,
       fixedCents: config.STRIPE_CARD_FEE_FIXED_CENTS,
     };
-  }
-  if (config.STRIPE_ACH_FEE_BPS === undefined || config.STRIPE_ACH_FEE_FIXED_CENTS === undefined)
-    return undefined;
-  return {
-    enabled: true,
-    percentageBasisPoints: config.STRIPE_ACH_FEE_BPS,
-    fixedCents: config.STRIPE_ACH_FEE_FIXED_CENTS,
-    capCents: config.STRIPE_ACH_FEE_CAP_CENTS,
-    bankVerificationCents: config.STRIPE_ACH_VERIFICATION_CENTS,
-    includeBankVerificationCost: config.STRIPE_ACH_COVER_VERIFICATION_COST,
-  };
 }
 
 function objectId(value: string | Stripe.PaymentIntent | null) {
@@ -49,18 +37,16 @@ export class StripeCheckoutService {
   ) {
     if (!/^[A-Za-z0-9._:-]{16,200}$/.test(idempotencyKey))
       throw new AppError(400, "INVALID_IDEMPOTENCY_KEY", "Provide a 16 to 200 character Idempotency-Key header");
+    if (input.methodFamily !== "card" || !this.config.STRIPE_CARD_ENABLED)
+      throw new AppError(422, "PAYMENT_METHOD_UNAVAILABLE", "Card payment is unavailable");
     if (
       !this.config.STRIPE_SECRET_KEY ||
+      !this.config.STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION ||
       !this.config.STRIPE_CHECKOUT_SUCCESS_URL ||
       !this.config.STRIPE_CHECKOUT_CANCEL_URL ||
       !this.config.PAYMENT_STATUS_TOKEN_SECRET
     )
       throw new AppError(503, "STRIPE_UNAVAILABLE", "Stripe checkout is not configured");
-    if (
-      (input.methodFamily === "card" && !this.config.STRIPE_CARD_ENABLED) ||
-      (input.methodFamily === "ach" && !this.config.STRIPE_ACH_ENABLED)
-    )
-      throw new AppError(422, "PAYMENT_METHOD_UNAVAILABLE", "Selected Stripe payment method is unavailable");
 
     const designation = await resolveDonationDesignation(input);
     const donationPurpose = validateDonationPurpose(input.donationPurpose, designation);
@@ -91,7 +77,7 @@ export class StripeCheckoutService {
       donationPurpose,
       idempotencyKey,
       requestFingerprint: fingerprint,
-      feePolicy: feePolicy(this.config, input.methodFamily),
+      feePolicy: feePolicy(this.config),
       actorId,
       guestStatusToken: statusToken,
     });
@@ -114,23 +100,10 @@ export class StripeCheckoutService {
       // Stripe API 2026-09-30 uses Dashboard-managed dynamic payment methods.
       // The configured Payment Method Configuration, or Stripe's dashboard default,
       // determines what Checkout presents; explicit payment_method_types is rejected.
-      ...(this.paymentMethodConfiguration(input.methodFamily)
-        ? { payment_method_configuration: this.paymentMethodConfiguration(input.methodFamily) }
-        : {}),
-      ...(input.methodFamily === "ach"
-        ? {
-            payment_method_options: {
-              us_bank_account: {
-                verification_method: this.config.STRIPE_FINANCIAL_CONNECTIONS_ENABLED
-                  ? ("automatic" as const)
-                  : ("microdeposits" as const),
-                ...(this.config.STRIPE_FINANCIAL_CONNECTIONS_ENABLED
-                  ? { financial_connections: { permissions: ["payment_method" as const] } }
-                  : {}),
-              },
-            },
-          }
-        : {}),
+      payment_method_configuration: this.config.STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION,
+      // Donation amounts and settlement are USD-only; prevent dashboard-enabled
+      // adaptive pricing from offering a localized checkout currency.
+      adaptive_pricing: { enabled: false },
       line_items: [
         {
           quantity: 1,
@@ -160,7 +133,9 @@ export class StripeCheckoutService {
     if (
       !session.url ||
       session.currency?.toLowerCase() !== "usd" ||
-      session.amount_total !== attempt.totalChargeCents
+      session.amount_total !== attempt.totalChargeCents ||
+      session.payment_method_types?.length !== 1 ||
+      session.payment_method_types[0] !== "card"
     )
       throw new AppError(502, "STRIPE_SESSION_MISMATCH", "Stripe Checkout Session does not match the prepared payment");
     await this.payments.bindStripeCheckout(String(attempt._id), {
@@ -180,9 +155,4 @@ export class StripeCheckoutService {
     };
   }
 
-  private paymentMethodConfiguration(methodFamily: "card" | "ach") {
-    return methodFamily === "card"
-      ? this.config.STRIPE_CARD_PAYMENT_METHOD_CONFIGURATION ?? this.config.STRIPE_PAYMENT_METHOD_CONFIGURATION
-      : this.config.STRIPE_ACH_PAYMENT_METHOD_CONFIGURATION ?? this.config.STRIPE_PAYMENT_METHOD_CONFIGURATION;
-  }
 }

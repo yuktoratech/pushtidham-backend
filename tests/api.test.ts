@@ -49,7 +49,7 @@ const general = () => ({
   type: "general",
   giving: givingId,
   amountCents: 2500,
-  paymentMethod: "paypal",
+  paymentMethod: "card",
 });
 before(async () => {
   mongo = await MongoMemoryServer.create();
@@ -393,78 +393,29 @@ test("Events validate dates, publish visibility and admin authorization", async 
   assert.equal((await request(app).get("/api/v1/events")).body.data.length, 1);
   assert.equal((await request(app).get("/api/v1/events/draft")).status, 404);
 });
-test("donations require matching references, server-owned fixed amounts and bounded integer cents", async () => {
+test("legacy public donation creation is retired; Card checkout owns online creation", async () => {
   const base = general();
-  assert.equal(
-    (
-      await request(app)
-        .post("/api/v1/donations")
-        .send({ ...base, giving: undefined })
-    ).status,
-    400,
-  );
-  assert.equal(
-    (
-      await request(app)
-        .post("/api/v1/donations")
-        .send({ ...base, event: eventId })
-    ).status,
-    400,
-  );
-  assert.equal(
-    (
-      await request(app)
-        .post("/api/v1/donations")
-        .send({ ...base, type: "event", giving: undefined })
-    ).status,
-    400,
-  );
-  for (const amount of [2000, 0, -1, 1.25, 1000001])
-    assert.equal(
-      (
-        await request(app)
-          .post("/api/v1/donations")
-          .send({ ...base, amountCents: amount })
-      ).status,
-      400,
-    );
-  assert.equal(
-    (
-      await request(app)
-        .post("/api/v1/donations")
-        .send({ ...base, status: "completed" })
-    ).status,
-    400,
-  );
-  assert.equal(
-    (
-      await request(app)
-        .post("/api/v1/donations")
-        .set("Authorization", "Bearer invalid")
-        .send(base)
-    ).status,
-    401,
-  );
-  const made = await request(app)
-    .post("/api/v1/donations")
-    .set(auth(donorToken))
-    .send(base);
-  assert.equal(made.status, 201);
-  donationId = made.body.data._id;
-  assert.equal(made.body.data.status, "pending");
-  assert.equal(made.body.data.currency, "USD");
-  assert.match(made.body.data.donationNumber, /^PD-\d{8}-[A-F0-9]{16}$/);
-  const event = await request(app)
-    .post("/api/v1/donations")
-    .send({
-      ...base,
-      type: "event",
-      giving: undefined,
-      event: eventId,
-      amountCents: 1234,
-    });
-  assert.equal(event.status, 409);
-  assert.equal(event.body.error.code, "EVENT_DONATIONS_DISABLED");
+  for (const input of [base, { ...base, paymentMethod: "paypal" }, { ...base, paymentMethod: "ach" }]) {
+    const response = await request(app).post("/api/v1/donations").send(input);
+    assert.equal(response.status, 404);
+    assert.equal(await Donation.countDocuments(), 0);
+  }
+  donationId = String(new mongoose.Types.ObjectId());
+  await Donation.create({
+    _id: donationId,
+    donationNumber: "PD-HISTORICAL-READ-001",
+    user: donorId,
+    donorName: "Test donor",
+    donorEmail: "donor@example.test",
+    type: "general",
+    giving: givingId,
+    designationTitle: "Test Giving",
+    amountCents: 2500,
+    currency: "USD",
+    paymentMethod: "card",
+    status: "pending",
+    source: "online",
+  });
   assert.equal(
     (
       await request(app)
@@ -561,7 +512,7 @@ test("offline donations require admin, share model and enforce terminal status t
     409,
   );
 });
-test("custom and combined modes, lifecycle eligibility, filtering and literal search", async () => {
+test("custom and combined Giving eligibility remains read-only outside Card checkout", async () => {
   const custom = await request(app)
     .post("/api/v1/admin/giving")
     .set(auth(adminToken))
@@ -579,15 +530,9 @@ test("custom and combined modes, lifecycle eligibility, filtering and literal se
       amountType: "fixed_and_custom",
       fixedAmountsCents: [2500],
     });
-  for (const id of [custom.body.data._id, combined.body.data._id])
-    assert.equal(
-      (
-        await request(app)
-          .post("/api/v1/donations")
-          .send({ ...general(), giving: id, amountCents: 1234 })
-      ).status,
-      201,
-    );
+  for (const id of [custom.body.data._id, combined.body.data._id]) {
+    assert.equal((await request(app).post("/api/v1/donations").send({ ...general(), giving: id, amountCents: 1234 })).status, 404);
+  }
   assert.equal(
     (
       await request(app)
@@ -640,7 +585,7 @@ test("custom and combined modes, lifecycle eligibility, filtering and literal se
           event: eventId,
         })
     ).status,
-    409,
+    404,
   );
   await request(app)
     .patch("/api/v1/admin/events/" + eventId + "/status")
@@ -652,8 +597,9 @@ test("custom and combined modes, lifecycle eligibility, filtering and literal se
         .delete("/api/v1/admin/giving/" + custom.body.data._id)
         .set(auth(adminToken))
     ).status,
-    409,
+    204,
   );
+  assert.equal((await request(app).get("/api/v1/giving/custom-active")).status,404);
   const unused = await request(app)
     .post("/api/v1/admin/giving")
     .set(auth(adminToken))
@@ -669,15 +615,22 @@ test("custom and combined modes, lifecycle eligibility, filtering and literal se
   assert.equal((await request(app).get("/api/v1/giving/unused")).status, 404);
   assert.ok(await Giving.exists({ _id: unused.body.data._id }));
 });
-test("parallel donation references are unique and database rejects duplicate numbers", async () => {
-  const res = await Promise.all(
-    Array.from({ length: 12 }, () =>
-      request(app).post("/api/v1/donations").send(general()),
-    ),
-  );
-  assert.ok(res.every((r) => r.status === 201));
-  assert.equal(new Set(res.map((r) => r.body.data.donationNumber)).size, 12);
-  const original = await Donation.findById(res[0]!.body.data._id).lean();
+test("database donation references remain unique", async () => {
+  const originals = await Promise.all(Array.from({ length: 12 }, (_, index) => Donation.create({
+    donationNumber: `PD-TEST-UNIQUE-${index}`,
+    donorName: "Test donor",
+    donorEmail: "donor@example.test",
+    type: "general",
+    giving: givingId,
+    designationTitle: "Test Giving",
+    amountCents: 2500,
+    currency: "USD",
+    paymentMethod: "offline",
+    status: "pending",
+    source: "offline",
+  })));
+  assert.equal(new Set(originals.map((row) => row.donationNumber)).size, 12);
+  const original = await Donation.findById(originals[0]!._id).lean();
   assert.ok(original);
   const clone = { ...original };
   for (const key of ["_id", "createdAt", "updatedAt"])
@@ -701,19 +654,11 @@ test("CORS, malformed JSON, body limit, health and non-sensitive error responses
     ).status,
     403,
   );
+  assert.equal((await request(app).post("/api/v1/payments/stripe/checkout-sessions").set("Content-Type", "application/json").send("{bad")).status, 400);
   assert.equal(
     (
       await request(app)
-        .post("/api/v1/donations")
-        .set("Content-Type", "application/json")
-        .send("{bad")
-    ).status,
-    400,
-  );
-  assert.equal(
-    (
-      await request(app)
-        .post("/api/v1/donations")
+        .post("/api/v1/payments/stripe/checkout-sessions")
         .send({ data: "x".repeat(40000) })
     ).status,
     413,
@@ -897,9 +842,9 @@ test("public Events reject new donations; offline historical Events only need to
     (
       await request(app)
         .post("/api/v1/donations")
-        .send({ ...input, paymentMethod: "paypal" })
+        .send({ ...input, paymentMethod: "card" })
     ).status,
-    409,
+    404,
   );
   assert.equal(
     (
@@ -911,7 +856,7 @@ test("public Events reject new donations; offline historical Events only need to
           paymentMethod: "paypal",
         })
     ).status,
-    409,
+    404,
   );
   assert.equal(
     (

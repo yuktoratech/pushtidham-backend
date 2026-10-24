@@ -58,9 +58,9 @@ test('festival options require Event and exact server-configured amounts',async(
     await assert.rejects(resolveDonationDesignation({...input,type:'general'}),(e:unknown)=>e instanceof AppError&&e.code==='INVALID_DESIGNATION');
   }
 });
-test('scheduled events retain custom donation amounts',async()=>{
+test('scheduled Events remain informational and cannot start donations',async()=>{
   const event=await Event.create({title:'Fixture scheduled event',slug:'fixture-scheduled',startsAt:new Date('2027-01-01'),location:'Fixture only',status:'published'});
-  assert.equal((await resolveDonationDesignation({type:'event',event:event.id,amountCents:12345})).title,event.title);
+  await assert.rejects(resolveDonationDesignation({type:'event',event:event.id,amountCents:12345}),(error:unknown)=>error instanceof AppError&&error.code==='EVENT_DONATIONS_DISABLED');
 });
 test('new Golden Palna prices never rewrite a historical $250 snapshot',async()=>{
   const gold=await Giving.findOne({slug:'gold-palna-seva'});assert.ok(gold);
