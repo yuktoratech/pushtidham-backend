@@ -167,6 +167,7 @@ test("refresh rotates hashed tokens, replay revokes session, logout immediately 
     .post("/api/v1/auth/login")
     .send({ email: "donor@example.test", password: testPassword });
   const first = cookie(login);
+  const initialSession = await Session.findOne({ user: donorId });
   assert.match(
     (login.headers["set-cookie"] as unknown as string[])[0]!,
     /HttpOnly/,
@@ -179,6 +180,8 @@ test("refresh rotates hashed tokens, replay revokes session, logout immediately 
     .send({});
   assert.equal(refreshed.status, 200);
   assert.notEqual(cookie(refreshed), first);
+  const renewedSession = await Session.findOne({ user: donorId });
+  assert.ok(renewedSession!.expiresAt.getTime() >= initialSession!.expiresAt.getTime());
   const sessions = await Session.find({ user: donorId }).select("+tokenHash");
   assert.ok(sessions.every((s) => /^[a-f0-9]{64}$/.test(s.tokenHash)));
   assert.equal(

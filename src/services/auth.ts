@@ -146,10 +146,13 @@ export class AuthService {
       throw denied();
     }
     if (user.passwordChangedAt && session.createdAt < user.passwordChangedAt) throw denied();
+    const nextExpiresAt = new Date(
+      Date.now() + seconds(this.config.JWT_REFRESH_EXPIRES_IN) * 1000,
+    );
     const tokens = this.tokens(
       String(user._id),
       session.sessionId,
-      session.expiresAt,
+      nextExpiresAt,
     );
     const changed = await Session.findOneAndUpdate(
       {
@@ -158,7 +161,7 @@ export class AuthService {
         revokedAt: null,
         expiresAt: { $gt: new Date() },
       },
-      { $set: { tokenHash: hash(tokens.refreshToken) } },
+      { $set: { tokenHash: hash(tokens.refreshToken), expiresAt: nextExpiresAt } },
     );
     if (!changed) {
       await Session.updateOne(
