@@ -233,6 +233,27 @@ test("refresh rotates hashed tokens, replay revokes session, logout immediately 
     403,
   );
 });
+test("normal session renewals do not consume the authentication attempt limit", async () => {
+  const isolatedApp = createApp(config);
+  const login = await request(isolatedApp)
+    .post('/api/v1/auth/login')
+    .send({email: 'donor@example.test', password: testPassword});
+  assert.equal(login.status, 200);
+  let currentCookie = cookie(login);
+  for (let index = 0; index < 25; index++) {
+    const renewed = await request(isolatedApp)
+      .post('/api/v1/auth/refresh')
+      .set('Origin', config.FRONTEND_URL)
+      .set('Cookie', currentCookie)
+      .send({});
+    assert.equal(renewed.status, 200);
+    currentCookie = cookie(renewed);
+  }
+  assert.equal((await request(isolatedApp).post('/api/v1/auth/register').send({})).status, 400);
+  assert.equal((await request(isolatedApp).post('/api/v1/auth/refresh').set('Origin', config.FRONTEND_URL).send({})).status, 401);
+  assert.equal((await request(isolatedApp).post('/api/v1/auth/refresh').set('Cookie', currentCookie).send({})).status, 403);
+});
+
 test("disabled users cannot login, refresh or use existing access tokens", async () => {
   const login = await request(app)
     .post("/api/v1/auth/login")

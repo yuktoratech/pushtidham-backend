@@ -85,7 +85,7 @@ export function routes(
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 20,
-    // Admin and donor share this login route. All other auth routes remain limited.
+    // Admin and donor share this login route. Session renewal is separate below.
     skip: (req) => config.NODE_ENV === "development" && req.path === "/auth/login",
     standardHeaders: "draft-8",
     legacyHeaders: false,
@@ -106,7 +106,6 @@ export function routes(
   router.post("/auth/login", limiter, validate({ body: login }), a.login);
   router.post(
     "/auth/refresh",
-    limiter,
     a.trusted,
     validate({ body: empty }),
     a.refresh,
