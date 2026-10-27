@@ -133,7 +133,8 @@ export function routes(
   router.post("/webhooks/stripe", stripe.webhook);
   router.post(
     "/payments/stripe/checkout-sessions",
-    authenticate(auth, true),
+    authenticate(auth),
+    authorizeRoles("donor"),
     validate({ body: stripeCheckoutBody }),
     stripe.create,
   );
