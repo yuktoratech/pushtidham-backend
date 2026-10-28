@@ -1,14 +1,15 @@
 import { Types } from "mongoose";
 import { PaymentAttempt } from "../models/payment-attempt.js";
 import { PaymentAdjustment } from "../models/payment-adjustment.js";
+import {donationDisplayStatus} from './donation-status.js';
 
 type Row = Record<string, unknown> & { _id: Types.ObjectId };
 type Attempt = Record<string, unknown> & { _id: Types.ObjectId; donation: Types.ObjectId };
 type Adjustment = Record<string, unknown> & { donation: Types.ObjectId; amountCents: number; type: string; status: string };
 
 function recordKind(row: Row, attempt?: Attempt) {
-  if (attempt) return "verified_online";
   if (row.source === "offline") return "offline";
+  if (attempt) return row.status === 'completed' && attempt.status === 'succeeded' && String(row.confirmedPaymentAttempt) === String(attempt._id) ? 'verified_online' : 'online';
   return row.paymentMethod === "paypal" ? "legacy_paypal" : row.paymentMethod === "bank_transfer" ? "legacy_bank_transfer" : "legacy_online";
 }
 function lifecycle(row: Row, attempt: Attempt | undefined, adjustments: Adjustment[]) {
@@ -19,9 +20,7 @@ function lifecycle(row: Row, attempt: Attempt | undefined, adjustments: Adjustme
   const gross = Number(attempt?.totalChargeCents ?? row.totalChargedCents ?? row.amountCents);
   if (refunds >= gross && refunds > 0) return "refunded";
   if (refunds > 0) return "partially_refunded";
-  if (attempt?.status === "verification_pending") return "verification_required";
-  if (attempt?.status) return attempt.status;
-  return row.status === "rejected" ? "failed" : row.status;
+  return null;
 }
 export async function donationViews(rows: Row[], admin: boolean) {
   const ids = rows.map((row) => row._id);
@@ -46,7 +45,7 @@ export async function donationViews(rows: Row[], admin: boolean) {
     const gross=attempt?Number(attempt.totalChargeCents):typeof row.totalChargedCents==="number"?row.totalChargedCents:null;
     const providerFee=typeof attempt?.actualProviderFeeCents==="number"?attempt.actualProviderFeeCents:typeof row.actualProviderFeeCents==="number"?row.actualProviderFeeCents:null;
     const net=typeof gross==="number"&&typeof providerFee==="number"?gross-providerFee-adjustedLoss:null;
-    const common={offlinePaymentMethod:row.offlinePaymentMethod??null,id:String(row._id),donationNumber:row.donationNumber,type:row.type,designationTitle:row.designationTitle,baseDonationCents:base,feeContributionCents:feeContribution,grossChargedCents:gross,actualProviderFeeCents:providerFee,adjustmentLossCents:adjustedLoss,netProceedsCents:net,currency:row.currency,paymentProvider:attempt?.provider??null,paymentMethod:attempt?.actualFundingSource??attempt?.methodFamily??row.paymentMethod,paymentLifecycle:attempt?.status??null,displayStatus:lifecycle(row,attempt,changes),donationStatus:row.status,recordKind:recordKind(row,attempt),providerVerified:Boolean(attempt&&attempt.status==="succeeded"&&String(row.confirmedPaymentAttempt)===String(attempt._id)),createdAt:row.createdAt,completedAt:row.completedAt};
+    const common={offlinePaymentMethod:row.offlinePaymentMethod??null,id:String(row._id),donationNumber:row.donationNumber,type:row.type,designationTitle:row.designationTitle,baseDonationCents:base,feeContributionCents:feeContribution,grossChargedCents:gross,actualProviderFeeCents:providerFee,adjustmentLossCents:adjustedLoss,netProceedsCents:net,currency:row.currency,paymentProvider:attempt?.provider??null,paymentMethod:attempt?.actualFundingSource??attempt?.methodFamily??row.paymentMethod,paymentLifecycle:attempt?.status??null,displayStatus:donationDisplayStatus(row,attempt),adjustmentStatus:lifecycle(row,attempt,changes),receiptEligible:row.status==="completed"&&(row.source==="offline"?Boolean(row.verifiedAt&&row.verifiedBy):Boolean(attempt&&attempt.status==="succeeded"&&String(row.confirmedPaymentAttempt)===String(attempt._id)))&&!changes.some(a=>a.status==="succeeded"&&["refund","ach_return","dispute"].includes(a.type)),donationStatus:row.status,recordKind:recordKind(row,attempt),providerVerified:Boolean(attempt&&attempt.status==="succeeded"&&String(row.confirmedPaymentAttempt)===String(attempt._id)),createdAt:row.createdAt,completedAt:row.completedAt};
     return admin?{...common,...snapshots,donor:{id:row.user?String(row.user):null,name:row.donorName,email:row.donorEmail,phone:row.donorPhone??null},references:{external:row.externalReference??null,bank:row.bankReference??null,offline:row.offlineReference??null,payment:attempt?.paymentId??attempt?.captureId??attempt?.orderId??attempt?.checkoutSessionId??null},adjustments:changes.map(({type,status,amountCents,occurredAt,reasonCode,providerReference})=>({type,status,amountCents,occurredAt,reasonCode:reasonCode??null,providerReference}))}:{...common,...snapshots};
   });
 }

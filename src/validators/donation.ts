@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { id, email, money, paging } from "./common.js";
+import {displayStatuses} from '../services/donation-status.js';
 import {
   donationTypes,
   paymentMethods,
@@ -40,7 +41,7 @@ export const donationQuery = z
     to: z.iso.datetime({ offset: true }).optional(),
     type: z.enum(donationTypes).optional(),
     paymentMethod: z.enum(paymentMethods).optional(),
-    status: z.enum(statuses).optional(),
+    status: z.enum(displayStatuses).optional(),
     source: z.enum(["online", "offline"]).optional(),
     giving: id.optional(),
     event: id.optional(),
@@ -65,7 +66,7 @@ export const financialReportQuery = z.object({
   provider: z.enum(["stripe","paypal","offline","legacy_paypal","legacy_bank_transfer"]).optional(),
   paymentMethod: z.enum(paymentMethods).optional(),
   type: z.enum(donationTypes).optional(),
-  status: z.enum(statuses).optional(),
+  status: z.enum(displayStatuses).optional(),
 }).strict().refine((v)=>!v.from||!v.to||new Date(v.from)<=new Date(v.to),{path:["to"],message:"Invalid date range"});
 export type DonationInput = z.infer<typeof offlineBody>;
 export type DonationQuery = z.infer<typeof donationQuery>;

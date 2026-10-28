@@ -10,6 +10,7 @@ import {
   validateDonationPurpose,
 } from "./donation-eligibility.js";
 import { donationViews } from "./donation-views.js";
+import {donationStatusStages} from './donation-status.js';
 export class DonationService {
   async create(input: DonationInput, actor?: Types.ObjectId, offline = false, options: {session?: ClientSession; donationNumber?: string; requestHash?: string} = {}) {
     if (!offline)
@@ -90,7 +91,15 @@ export class DonationService {
   }
   async list(query: DonationQuery, user?: Types.ObjectId, admin = false) {
     const filter = donationFilter(query, user);
-    const result = await paginate(Donation, filter, query);
+    let result;
+    if (query.status) {
+      const [facet] = await Donation.aggregate([
+        {$match: filter}, ...donationStatusStages(), {$match: {_displayStatus: query.status}},
+        {$facet: {data: [{$sort: {createdAt: -1, _id: -1}}, {$skip: (query.page - 1) * query.limit}, {$limit: query.limit}, {$unset: ['_statusAttempts', '_statusAttempt', '_displayStatus']}], count: [{$count: 'total'}]}},
+      ]);
+      const total = Number(facet?.count[0]?.total ?? 0);
+      result = {data: facet?.data ?? [], pagination: {page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit)}};
+    } else result = await paginate(Donation, filter, query);
     return { ...result, data: await donationViews(result.data as unknown as Array<Record<string,unknown> & {_id:Types.ObjectId}>, admin) };
   }
   donorView(doc: Record<string, unknown>) {
@@ -189,8 +198,8 @@ export class DonationService {
 export function donationFilter(query: DonationQuery, user?: Types.ObjectId) {
   const filter: Record<string, unknown> = {};
   if (user) filter.user = user;
-  for (const key of ["type", "paymentMethod", "status", "source", "giving", "event"] as const)
-    if (query[key]) filter[key] = query[key];
+  for (const key of ["type", "paymentMethod", "source", "giving", "event"] as const)
+    if (query[key]) filter[key] = key === 'giving' || key === 'event' ? new Types.ObjectId(query[key]) : query[key];
   if (query.from || query.to) filter.createdAt = {...(query.from ? {$gte: new Date(query.from)} : {}), ...(query.to ? {$lte: new Date(query.to)} : {})};
   if (query.search) {
     const regex = {$regex: escapeRegex(query.search), $options: "i"};

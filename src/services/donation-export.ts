@@ -5,6 +5,7 @@ import {AppError} from "../utils/errors.js";
 import type {DonationExportQuery} from "../validators/donation.js";
 import {donationFilter} from "./donations.js";
 import {donationViews} from "./donation-views.js";
+import {donationStatusStages} from './donation-status.js';
 
 const maxRows = 10000;
 function csv(value: unknown) {
@@ -19,11 +20,10 @@ function amount(cents: number | null) {return cents === null ? "" : (cents / 100
 export async function exportDonations(query: DonationExportQuery, res: Response) {
   const filter = donationFilter(query);
   const providerMatch = query.provider ? [
-    {$lookup: {from: "paymentattempts", localField: "confirmedPaymentAttempt", foreignField: "_id", as: "exportAttempts"}},
-    {$set: {exportProviderClass: {$cond: [{$gt: [{$size: "$exportAttempts"}, 0]}, {$first: "$exportAttempts.provider"}, {$cond: [{$eq: ["$source", "offline"]}, "offline", {$concat: ["legacy_", "$paymentMethod"]}]}]}}},
+    {$set: {exportProviderClass: {$cond: [{$gt: [{$size: "$_statusAttempts"}, 0]}, '$_statusAttempt.provider', {$cond: [{$eq: ["$source", "offline"]}, "offline", {$concat: ["legacy_", "$paymentMethod"]}]}]}}},
     {$match: {exportProviderClass: query.provider}},
   ] : [];
-  const pipeline = [{$match: filter}, ...providerMatch];
+  const pipeline = [{$match: filter}, ...(query.status || query.provider ? donationStatusStages() : []), ...(query.status ? [{$match: {_displayStatus: query.status}}] : []), ...providerMatch];
   const counts = await Donation.aggregate([...pipeline, {$count: "count"}]);
   const count = Number(counts[0]?.count ?? 0);
   if (count > maxRows) throw new AppError(413, "EXPORT_TOO_LARGE", `Narrow the filters to ${maxRows} records or fewer`);
@@ -39,10 +39,10 @@ export async function exportDonations(query: DonationExportQuery, res: Response)
     for (const row of views) {
       if (res.destroyed) break;
       totalBase += row.baseDonationCents;
-      if (row.donationStatus === "completed") totalCompletedBase += row.baseDonationCents;
+      if (row.displayStatus === "completed") totalCompletedBase += row.baseDonationCents;
       exported++;
       const donor = "donor" in row ? row.donor : {name: "", email: ""};
-      await write([row.donationNumber, date(row.createdAt), donor.name, donor.email, row.type === "event" ? "Event" : "General", row.designationTitle, row.donationPurpose, amount(row.baseDonationCents), amount(row.grossChargedCents), row.donationStatus, row.paymentMethod, row.recordKind, row.festivalTitle, row.donationOptionTitle, row.offlinePaymentMethod].map(csv).join(",") + "\r\n");
+      await write([row.donationNumber, date(row.createdAt), donor.name, donor.email, row.type === "event" ? "Event" : "General", row.designationTitle, row.donationPurpose, amount(row.baseDonationCents), amount(row.grossChargedCents), row.displayStatus, row.paymentMethod, row.recordKind, row.festivalTitle, row.donationOptionTitle, row.offlinePaymentMethod].map(csv).join(",") + "\r\n");
     }
     batch = [];
   };
