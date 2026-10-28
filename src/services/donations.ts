@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { Types } from "mongoose";
+import { Types, type ClientSession } from "mongoose";
 import { Donation } from "../models/donation.js";
 import type { DonationInput, DonationQuery } from "../validators/donation.js";
 import { AppError, missing } from "../utils/errors.js";
@@ -11,10 +11,10 @@ import {
 } from "./donation-eligibility.js";
 import { donationViews } from "./donation-views.js";
 export class DonationService {
-  async create(input: DonationInput, actor?: Types.ObjectId, offline = false) {
+  async create(input: DonationInput, actor?: Types.ObjectId, offline = false, options: {session?: ClientSession; donationNumber?: string; requestHash?: string} = {}) {
     if (!offline)
       throw new AppError(422, "PAYMENT_METHOD_UNAVAILABLE", "Public donations require Card checkout");
-    const designation = await resolveDonationDesignation(input, offline);
+    const designation = await resolveDonationDesignation(input, offline, options.session);
     const { title, festivalTitle, donationOptionTitle } = designation;
     const donationPurpose = validateDonationPurpose(input.donationPurpose, designation);
     const user =
@@ -23,7 +23,7 @@ export class DonationService {
         : offline
           ? undefined
           : actor;
-    await requireActiveDonationUser(user);
+    await requireActiveDonationUser(user, options.session);
     const status = offline && "status" in input ? input.status : "pending";
     const now = new Date();
     const base = {
@@ -41,6 +41,8 @@ export class DonationService {
       amountCents: input.amountCents,
       currency: "USD" as const,
       paymentMethod: "offline" as const,
+      offlinePaymentMethod: input.offlinePaymentMethod ?? "other",
+      offlineRequestHash: options.requestHash,
       source: "offline" as const,
       status,
       offlineReference:
@@ -58,15 +60,17 @@ export class DonationService {
     };
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await Donation.create({
+        const doc = new Donation({
           ...base,
-          donationNumber:
+          donationNumber: options.donationNumber ??
             "PD-" +
             now.toISOString().slice(0, 10).replaceAll("-", "") +
             "-" +
             randomBytes(8).toString("hex").toUpperCase(),
         });
+        return await doc.save({session: options.session});
       } catch (error) {
+        if (options.session) throw error;
         if (!(
           typeof error === "object" &&
           error &&

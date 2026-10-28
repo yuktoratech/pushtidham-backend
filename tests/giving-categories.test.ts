@@ -4,7 +4,7 @@ import {randomBytes} from "node:crypto";
 import mongoose from "mongoose";
 import request from "supertest";
 import bcrypt from "bcrypt";
-import {MongoMemoryServer} from "mongodb-memory-server";
+import {MongoMemoryReplSet} from "mongodb-memory-server";
 import {createApp} from "../src/app.js";
 import {loadConfig} from "../src/config/env.js";
 import {User} from "../src/models/user.js";
@@ -20,10 +20,10 @@ import {categoryMapping,legacyMapping,verifyCategoryMigrationRecords} from "../s
 import {CATEGORY_FREEZE_ID} from "../src/middleware/category-edit-freeze.js";
 const config=loadConfig({NODE_ENV:"test",MONGODB_URI:"mongodb://127.0.0.1/isolated_categories",FRONTEND_URL:"http://localhost:3000",JWT_ACCESS_SECRET:randomBytes(40).toString("hex"),JWT_REFRESH_SECRET:randomBytes(40).toString("hex")});
 const app=createApp(config),service=new CatalogService();
-let mongo:MongoMemoryServer,token:string,categoryId:string,givingId:string,eventId:string;
+let mongo:MongoMemoryReplSet,token:string,categoryId:string,givingId:string,eventId:string;
 before(async()=>{
- mongo=await MongoMemoryServer.create();await mongoose.connect(mongo.getUri(),{dbName:"category_isolated"});
- await Promise.all([GivingCategory.init(),Giving.init(),Event.init(),User.init()]);
+ mongo=await MongoMemoryReplSet.create({replSet:{count:1}});await mongoose.connect(mongo.getUri(),{dbName:"category_isolated"});
+ await Promise.all([GivingCategory.init(),Giving.init(),Event.init(),User.init(),Donation.init()]);
  const password=randomBytes(20).toString("hex");await User.create({name:"Admin",email:"category-admin@example.test",passwordHash:await bcrypt.hash(password,4),role:"admin",canManageGivingCategories:true});
  const login=await request(app).post("/api/v1/auth/login").send({email:"category-admin@example.test",password});assert.equal(login.status,200);token=login.body.data.accessToken;
 });
@@ -74,15 +74,15 @@ test("Other purpose remains validated for offline donations; removed public rout
   const response=await request(app).post("/api/v1/donations").send({...body,donationPurpose:purpose,paymentMethod:"card"});
   assert.equal(response.status,404);
  }
- const blank=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,donationPurpose:"   "});
+ const blank=await request(app).post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-1-0001").set("Authorization","Bearer "+token).send({...body,donationPurpose:"   "});
  assert.ok(blank.status>=400);
- const saved=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,donationPurpose:"  Community support  "});
+ const saved=await request(app).post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-2-0001").set("Authorization","Bearer "+token).send({...body,donationPurpose:"  Community support  "});
  assert.equal(saved.status,201);
  assert.equal(saved.body.data.donationPurpose,"Community support");
  assert.equal((await Donation.findById(saved.body.data._id))?.donationPurpose,"Community support");
  const adminView=await request(app).get(`/api/v1/admin/donations/${saved.body.data._id}`).set("Authorization","Bearer "+token);
  assert.equal(adminView.body.data.donationPurpose,"Community support");
- const legacy=await request(app).post("/api/v1/admin/donations/offline").set("Authorization","Bearer "+token).send({...body,giving:givingId,amountCents:8400});
+ const legacy=await request(app).post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-3-0001").set("Authorization","Bearer "+token).send({...body,giving:givingId,amountCents:8400});
  assert.equal(legacy.status,201);
  assert.equal(legacy.body.data.donationPurpose,undefined);
  await assert.rejects(Giving.create({title:"Other",slug:"other",categoryId:category._id,category:"general",amountType:"custom",fixedAmountsCents:[],status:"active"}));

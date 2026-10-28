@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import bcrypt from "bcrypt";
 import mongoose from "mongoose";
 import request from "supertest";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config/env.js";
 import { User } from "../src/models/user.js";
@@ -29,7 +29,7 @@ const env = {
 };
 const config = loadConfig(env);
 const app = createApp(config);
-let mongo: MongoMemoryServer;
+let mongo: MongoMemoryReplSet;
 let adminToken: string;
 let donorToken: string;
 let otherToken: string;
@@ -52,7 +52,7 @@ const general = () => ({
   paymentMethod: "card",
 });
 before(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await MongoMemoryReplSet.create({replSet:{count:1}});
   await mongoose.connect(mongo.getUri(), { dbName: "isolated_test" });
   await Promise.all([
     User.init(),
@@ -489,14 +489,14 @@ test("offline donations require admin, share model and enforce terminal status t
   assert.equal(
     (
       await request(app)
-        .post("/api/v1/admin/donations/offline")
+        .post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-1-0001")
         .set(auth(donorToken))
         .send(body)
     ).status,
     403,
   );
   const made = await request(app)
-    .post("/api/v1/admin/donations/offline")
+    .post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-2-0001")
     .set(auth(adminToken))
     .send({
       ...body,
@@ -885,7 +885,7 @@ test("public Events reject new donations; offline historical Events only need to
   assert.equal(
     (
       await request(app)
-        .post("/api/v1/admin/donations/offline")
+        .post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-3-0001")
         .set(auth(adminToken))
         .send({ ...input, event: String(historical._id) })
     ).status,
@@ -898,7 +898,7 @@ test("public Events reject new donations; offline historical Events only need to
   assert.equal(
     (
       await request(app)
-        .post("/api/v1/admin/donations/offline")
+        .post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-4-0001")
         .set(auth(adminToken))
         .send({ ...input, event: String(historical._id) })
     ).status,
@@ -907,7 +907,7 @@ test("public Events reject new donations; offline historical Events only need to
   assert.equal(
     (
       await request(app)
-        .post("/api/v1/admin/donations/offline")
+        .post("/api/v1/admin/donations/offline").set("Idempotency-Key", "offline-existing-test-5-0001")
         .set(auth(adminToken))
         .send({ ...input, event: String(new mongoose.Types.ObjectId()) })
     ).status,

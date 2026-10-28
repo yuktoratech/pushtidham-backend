@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { Types, type ClientSession } from "mongoose";
 import { Event } from "../models/event.js";
 import { Giving } from "../models/giving.js";
 import { GivingCategory } from "../models/giving-category.js";
@@ -17,6 +17,7 @@ export type DonationDesignation = {
 export async function resolveDonationDesignation(
   input: DonationDesignation,
   offline = false,
+  session?: ClientSession,
 ) {
   if (input.giving) {
     if (input.event)
@@ -25,7 +26,7 @@ export async function resolveDonationDesignation(
       _id: input.giving,
       deletedAt: null,
       status: "active",
-    });
+    }).session(session ?? null);
     if (!giving) missing("Active Giving");
     if (giving.slug === "other" && (giving.category !== "general" || giving.amountType !== "custom" || giving.fixedAmountsCents.length))
       throw new AppError(409, "INVALID_OTHER_CONFIGURATION", "Other Giving must be a custom-only General Donation");
@@ -56,13 +57,13 @@ export async function resolveDonationDesignation(
   const event = await Event.findOne({
     _id: input.event,
     ...(offline ? {} : { deletedAt: null, status: "published" }),
-  });
+  }).session(session ?? null);
   if (!event) missing(offline ? "Event" : "Published Event");
   return { title: event.title, event };
 }
 
-export async function requireActiveDonationUser(user?: Types.ObjectId) {
-  if (user && !(await User.exists({ _id: user, status: "active" })))
+export async function requireActiveDonationUser(user?: Types.ObjectId, session?: ClientSession) {
+  if (user && !(await User.exists({ _id: user, status: "active" }).session(session ?? null)))
     missing("Active user");
 }
 

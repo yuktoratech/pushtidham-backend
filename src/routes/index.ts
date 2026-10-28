@@ -1,3 +1,5 @@
+import {z} from "zod";
+import {OfflineDonationService} from "../services/offline-donations.js";
 import { Router } from "express";
 import { health } from "../controllers/health.js";
 import { rateLimit } from "express-rate-limit";
@@ -58,6 +60,7 @@ export function routes(
   const auth = new AuthService(config);
   const catalog = new CatalogService(dependencies.images);
   const donations = new DonationService();
+  const offline = new OfflineDonationService(donations, auth, dependencies.mail, config.FRONTEND_URL);
   const receipts = new ReceiptService();
   const a = authController(auth, config, dependencies.mail);
   const admin = Router();
@@ -218,7 +221,17 @@ export function routes(
   admin.get("/donations", validate({ query: donationQuery }), ad.list);
   admin.get("/donations/export.csv", validate({query: donationExportQuery}), async (req, res) => exportDonations(req.validated.query as import("../validators/donation.js").DonationExportQuery, res));
   admin.get("/reports/financial", validate({ query: financialReportQuery }), financialReportController());
-  admin.post("/donations/offline", validate({ body: offlineBody }), ad.create);
+  admin.get("/donors/search", validate({query: z.object({email: z.string().trim().min(3).max(254)}).strict()}), async (req, res) => {
+    res.json({success: true, data: await offline.search((req.validated.query as {email: string}).email)});
+  });
+  admin.post("/donors/:id/welcome-email", limiter, validate({params: idParams, body: empty}), async (req, res) => {
+    res.status(202).json({success: true, data: await offline.retryWelcome((req.validated.params as {id: string}).id)});
+  });
+  admin.post("/donations/offline", validate({body: offlineBody}), async (req, res) => {
+    const result = await offline.create(req.validated.body as import("../validators/donation.js").DonationInput, req.principal!.id, req.get("Idempotency-Key") ?? "");
+    res.status(result.replayed ? 200 : 201).json({success: true, data: result});
+    if (result.donor.setupRequired && result.donor.welcomeEmailStatus === "pending") offline.dispatch(result.donor.id);
+  });
   admin.get("/donations/:id", validate({ params: idParams }), ad.get);
   admin.get("/donations/:id/receipt", validate({params: idParams}), async (req, res) => {
     const result = await receipts.create((req.validated.params as {id: string}).id);

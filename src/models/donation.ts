@@ -47,6 +47,8 @@ const schema = new Schema(
     externalReference: String,
     bankReference: String,
     offlineReference: String,
+    offlinePaymentMethod: { type: String, enum: ["cash", "check", "other"] },
+    offlineRequestHash: { type: String, select: false },
     adminNote: String,
     verifiedBy: { type: Schema.Types.ObjectId, ref: "User" },
     verifiedAt: Date,

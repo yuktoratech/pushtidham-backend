@@ -2,9 +2,10 @@ import {before, after, test, mock} from "node:test";
 import assert from "node:assert/strict";
 import {randomBytes} from "node:crypto";
 import mongoose, {Types} from "mongoose";
-import {MongoMemoryServer} from "mongodb-memory-server";
+import {MongoMemoryReplSet} from "mongodb-memory-server";
 import request from "supertest";
 import {dailySeva, utsavOptions, festivalGroups, buildClientCatalogPlan} from "../src/content/client-catalog.js";
+import {User} from "../src/models/user.js";
 import {Giving} from "../src/models/giving.js";
 import {Event} from "../src/models/event.js";
 import {Donation} from "../src/models/donation.js";
@@ -17,10 +18,11 @@ import {AppError} from "../src/utils/errors.js";
 const config = loadConfig({NODE_ENV:"test", MONGODB_URI:"mongodb://127.0.0.1/unused", FRONTEND_URL:"http://localhost:3000", JWT_ACCESS_SECRET:randomBytes(40).toString("hex"), JWT_REFRESH_SECRET:randomBytes(40).toString("hex")});
 const app = createApp(config);
 const admin = new Types.ObjectId(), donor = new Types.ObjectId();
-let mongo: MongoMemoryServer;
+let mongo: MongoMemoryReplSet;
 before(async () => {
-  mongo=await MongoMemoryServer.create();
+  mongo=await MongoMemoryReplSet.create({replSet:{count:1}});
   await mongoose.connect(mongo.getUri(),{dbName:"isolated_client_catalog_fixtures"});
+  await Promise.all([User.init(),Donation.init()]);
   mock.method(AuthService.prototype,"authenticate",async(token:string)=>{
     if(token==='fixture-admin')return {id:admin,role:'admin' as const,sessionId:'fixture'};
     if(token==='fixture-donor')return {id:donor,role:'donor' as const,sessionId:'fixture'};
@@ -79,7 +81,7 @@ test('admin-only catalog options validate festival configuration',async()=>{
 });
 test('festival snapshots survive catalog edits and reach receipts, details and CSV',async()=>{
   const option=await Giving.findOne({slug:utsavOptions[0]!.slug});assert.ok(option);
-  const response=await request(app).post('/api/v1/admin/donations/offline').set('Authorization','Bearer fixture-admin').send({donorName:'Fixture Donor',donorEmail:'fixture@example.test',type:'event',giving:option.id,amountCents:100100,status:'completed'});
+  const response=await request(app).post('/api/v1/admin/donations/offline').set("Idempotency-Key", "offline-existing-test-1-0001").set('Authorization','Bearer fixture-admin').send({donorName:'Fixture Donor',donorEmail:'fixture@example.test',type:'event',giving:option.id,amountCents:100100,status:'completed'});
   assert.equal(response.status,201,JSON.stringify(response.body));
   const row=await Donation.findOne({giving:option._id});assert.ok(row);
   assert.equal(row.festivalTitle,'Dolotsav');assert.equal(row.donationOptionTitle,'Mukhya Manorathi');

@@ -23,6 +23,7 @@ export const offlineBody = z
   .object({
     ...fields,
     user: id.optional(),
+    offlinePaymentMethod: z.enum(["cash", "check", "other"]).optional(),
     status: z.enum(statuses).default("pending"),
     offlineReference: z.string().trim().max(200).optional(),
     adminNote: z.string().max(2000).optional(),

@@ -78,10 +78,10 @@ export class ReceiptService {
     page.drawRectangle({x: 600, y: 234, width: 158, height: 31, borderColor: gold, borderWidth: 0.8});
     fitted(usd(row.amountCents), 612, 244, 134, 16, true);
 
-    // The model does not distinguish cash/cheque/money order for offline records.
+    // Historical records without a recorded offline method retain the Other label.
     // Leave those unchecked rather than inferring a funding method or reference.
     const options = ["Cash", "Cheque", "Money order", "Card", "Other"];
-    const selected = offline ? "Other" : row.paymentMethod === "card" ? "Card" : "Other";
+    const selected = offline ? (row.offlinePaymentMethod === "cash" ? "Cash" : row.offlinePaymentMethod === "check" ? "Cheque" : "Other") : row.paymentMethod === "card" ? "Card" : "Other";
     options.forEach((label, index) => {
       const x = 34 + index * 105;
       page.drawRectangle({x, y: 212, width: 9, height: 9, borderColor: ink, borderWidth: 0.6});

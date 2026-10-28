@@ -233,28 +233,30 @@ export class AuthService {
     if (!updated.modifiedCount) throw new AppError(409, "PASSWORD_CHANGED", "Password changed in another session; please sign in again");
     await Session.updateMany({user: user._id, revokedAt: null}, {$set: {revokedAt: changedAt}});
   }
-  async requestPasswordReset(email: string, mail: MailSender | undefined, frontendUrl: string) {
+  async requestPasswordReset(email: string, mail: MailSender | undefined, frontendUrl: string, welcome = false) {
     if (!mail) throw new AppError(503, "MAIL_UNAVAILABLE", "Email service is not configured");
-    const user = await User.findOne({email, role: "donor", status: "active"});
-    if (!user) return;
+    const user = await User.findOne({email, role: "donor", status: "active", ...(welcome ? {passwordSetupRequired: true} : {})});
+    if (!user) return false;
     const token = randomBytes(32).toString("hex");
     const resetTokenHash = hash(token);
-    await User.updateOne({_id: user._id}, {$set: {resetTokenHash, resetExpiresAt: new Date(Date.now() + 30 * 60_000)}});
+    const updated = await User.updateOne({_id: user._id, status: "active", ...(welcome ? {passwordSetupRequired: true} : {})}, {$set: {resetTokenHash, resetExpiresAt: new Date(Date.now() + 30 * 60_000)}});
+    if (!updated.modifiedCount) return false;
     const url = new URL("/reset-password", frontendUrl);
     url.searchParams.set("token", token);
     await mail.send({
       to: user.email,
-      subject: "Pushtidham password reset",
-      text: `A password reset was requested for your account. This link expires in 30 minutes:\n${url.href}\n\nIf you did not request this, you can ignore this email.`,
-      html: `<p>A password reset was requested for your account.</p><p><a href="${escapeHtml(url.href)}">Reset your password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`,
+      subject: welcome ? "Welcome to Pushtidham: set up your donor account" : "Pushtidham password reset",
+      text: `${welcome ? "Thank you for your donation. Temple staff created your donor account. Use this link to verify your email ownership and choose your password." : "A password reset was requested for your account."} This link expires in 30 minutes:\n${url.href}\n\nIf you did not request this, you can ignore this email.`,
+      html: `<p>${welcome ? "Thank you for your donation. Set up your donor account by verifying email ownership and choosing a password." : "A password reset was requested for your account."}</p><p><a href="${escapeHtml(url.href)}">Reset your password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`,
     });
+    return true;
   }
   async resetPassword(token: string, newPassword: string) {
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_COST);
     const changedAt = new Date();
     const user = await User.findOneAndUpdate(
       {resetTokenHash: hash(token), resetExpiresAt: {$gt: changedAt}, role: "donor", status: "active"},
-      {$set: {passwordHash, passwordChangedAt: changedAt}, $unset: {resetTokenHash: 1, resetExpiresAt: 1}},
+      {$set: {passwordHash, passwordChangedAt: changedAt, passwordSetupRequired: false, emailVerifiedAt: changedAt}, $unset: {resetTokenHash: 1, resetExpiresAt: 1}},
     );
     if (!user) throw new AppError(400, "INVALID_RESET_TOKEN", "Reset link is invalid or expired");
     await Session.updateMany({user: user._id, revokedAt: null}, {$set: {revokedAt: changedAt}});
