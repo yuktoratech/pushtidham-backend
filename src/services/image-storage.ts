@@ -6,6 +6,7 @@ import {
 import type { Config } from "../config/env.js";
 import { AppError } from "../utils/errors.js";
 import type { SupportedImage } from "../utils/image-signature.js";
+import { log } from "../utils/logger.js";
 
 export type ImageKind = "giving" | "events" | "categories";
 export type ImageOwnershipClass = "giving" | "category" | "event-cover" | "event-gallery" | "legacy-flat" | "shared-site" | "home-slider" | "official-branding";
@@ -107,7 +108,17 @@ export class R2ImageStorage implements ImageStorage {
           CacheControl: "public, max-age=31536000, immutable",
         }),
       );
-    } catch {
+    } catch (error) {
+      const providerCode = error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name)
+        ? error.name
+        : "UNKNOWN";
+      const metadata = error && typeof error === "object" && "$metadata" in error
+        ? error.$metadata as {httpStatusCode?: unknown}
+        : undefined;
+      const providerStatus = typeof metadata?.httpStatusCode === "number" && metadata.httpStatusCode >= 400 && metadata.httpStatusCode <= 599
+        ? metadata.httpStatusCode
+        : undefined;
+      log("error", "r2_image_upload_failed", {providerCode, ...(providerStatus ? {providerStatus} : {})});
       throw new AppError(
         502,
         "IMAGE_UPLOAD_FAILED",
