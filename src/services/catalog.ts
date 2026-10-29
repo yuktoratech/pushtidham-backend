@@ -30,6 +30,18 @@ export class CatalogService {
     if (!category || (status === "active" && category.status !== "active"))
       throw new AppError(422, "INVALID_CATEGORY", "Choose an active Giving category");
   }
+  private async givingCategoryFor(input: GivingInput, current?: {category?: string; festivalGroup?: string}) {
+    const section = input.category ?? current?.category ?? "general";
+    const festival = section === "utsav" ? input.festivalGroup ?? current?.festivalGroup : "";
+    const slug = section === "daily_seva" ? "daily-seva" : section === "general" ? "general-donation" : festival;
+    if (!slug) throw new AppError(422, "INVALID_CATEGORY", "Choose a festival group for Utsav");
+    const category = await GivingCategory.findOne({slug});
+    if (!category || (input.status === "active" && category.status !== "active"))
+      throw new AppError(422, "INVALID_CATEGORY", "The category for this catalog section or festival is unavailable. Contact the developer.");
+    if (input.categoryId && input.categoryId !== String(category._id))
+      throw new AppError(422, "CATEGORY_MISMATCH", "Giving category must match the catalog section and festival group");
+    return category._id;
+  }
   async listGivingCategories(query: ListQuery & {status?: string}, admin = false) {
     return paginate(GivingCategory, {
       ...(admin ? (query.status ? {status: query.status} : {}) : {status: "active"}),
@@ -127,10 +139,10 @@ export class CatalogService {
     return doc ?? missing(kind);
   }
   async createGiving(input: GivingInput) {
-    await this.validateCategory(input.categoryId, input.status);
+    const categoryId = await this.givingCategoryFor(input);
     return this.createWithSlug("giving", input.title, input.slug, slug => Giving.create({
       title: input.title,
-      categoryId: input.categoryId,
+      categoryId,
       slug,
       category: input.category ?? "general",
       festivalGroup: input.festivalGroup ?? "",
@@ -160,13 +172,13 @@ export class CatalogService {
   async replaceGiving(id: string, input: GivingInput) {
     const doc = await Giving.findOne({ _id: id, deletedAt: null });
     if (!doc) missing("Giving");
-    await this.validateCategory(input.categoryId ?? (doc.categoryId ? String(doc.categoryId) : undefined), input.status);
+    const categoryId = await this.givingCategoryFor(input, doc);
     doc.set({
       title: input.title,
-      categoryId: input.categoryId ?? doc.categoryId,
+      categoryId,
       slug: input.slug ?? doc.slug,
       category: input.category ?? doc.category,
-      festivalGroup: input.festivalGroup ?? doc.festivalGroup,
+      festivalGroup: (input.category ?? doc.category) === "utsav" ? input.festivalGroup ?? doc.festivalGroup : "",
       description: input.description,
       image: input.image,
       amountType: input.amountType,

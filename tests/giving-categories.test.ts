@@ -61,9 +61,9 @@ test("Giving membership validates IDs, amounts, filtering and safe category dele
  await assert.rejects(resolveDonationDesignation({type:"general",giving:givingId,amountCents:8401}));
  await assert.rejects(resolveDonationDesignation({type:"general",giving:givingId,categoryId:new mongoose.Types.ObjectId().toString(),amountCents:8400}));
  assert.equal((await resolveDonationDesignation({type:"general",giving:givingId,categoryId,amountCents:8400})).title,"Mangla Seva");
- const custom=await service.createGiving(givingBody.parse({title:"Custom",slug:"custom",categoryId,amountType:"custom"}));
+ const custom=await service.createGiving(givingBody.parse({title:"Custom",slug:"custom",category:"daily_seva",categoryId,amountType:"custom"}));
  assert.ok(await resolveDonationDesignation({type:"general",giving:String(custom._id),amountCents:12345}));
- const mixed=await service.createGiving(givingBody.parse({title:"Mixed",slug:"mixed",categoryId,amountType:"fixed_and_custom",fixedAmountsCents:[2500]}));
+ const mixed=await service.createGiving(givingBody.parse({title:"Mixed",slug:"mixed",category:"daily_seva",categoryId,amountType:"fixed_and_custom",fixedAmountsCents:[2500]}));
  assert.ok(await resolveDonationDesignation({type:"general",giving:String(mixed._id),amountCents:6700}));
 });
 test("Other purpose remains validated for offline donations; removed public routes cannot create online donations",async()=>{
