@@ -14,6 +14,9 @@ import { GivingCategory } from "../src/models/giving-category.js";
 import { Event } from "../src/models/event.js";
 import { Session } from "../src/models/session.js";
 import { User } from "../src/models/user.js";
+import {ImageCleanup} from "../src/models/image-cleanup.js";
+import {ImageCleanupService} from "../src/services/image-cleanup.js";
+import {Donation} from "../src/models/donation.js";
 import {
   R2ImageStorage,
   hasImageStorageConfig,
@@ -50,8 +53,8 @@ class MockStorage implements ImageStorage {
     };
   }
   async deleteManagedUrl(url: string) {
-    void url;
-    return false;
+    this.deletes.push(url);
+    return true;
   }
 }
 
@@ -80,7 +83,8 @@ before(async () => {
   ]);
   mongo = await MongoMemoryServer.create();
   await mongoose.connect(mongo.getUri(), { dbName: "image_upload_test" });
-  await Promise.all([User.init(), Session.init(), Giving.init()]);
+  await Promise.all([User.init(), Session.init(), Giving.init(), GivingCategory.init()]);
+  await GivingCategory.create({name:"General Donation",slug:"general-donation",status:"active"});
   const passwordHash = await bcrypt.hash(password, 12);
   await User.create([
     { name: "Image admin", email: "image-admin@example.test", passwordHash, role: "admin", canManageGivingCategories: true },
@@ -269,7 +273,7 @@ test("missing storage configuration returns a sanitized availability error", asy
   assert.equal(JSON.stringify(response.body).includes("S3"), false);
 });
 
-test("Giving image replacement and soft deletion retain old objects", async () => {
+test("Giving image replacement and soft deletion clean old objects after saving", async () => {
   const original = "https://images.example.test/giving/00000000-0000-4000-8000-000000000011.png";
   const replacement = "https://images.example.test/giving/00000000-0000-4000-8000-000000000012.webp";
   const record = await Giving.create({
@@ -297,20 +301,22 @@ test("Giving image replacement and soft deletion retain old objects", async () =
       displayOrder: 1,
     });
   assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
-  assert.deepEqual(mock.deletes, []);
+  assert.deepEqual(mock.deletes, [original]);
   const removed = await request(app)
     .delete(`/api/v1/admin/giving/${record.id}`)
     .set(bearer(adminToken));
   assert.equal(removed.status, 204);
-  assert.deepEqual(mock.deletes, []);
+  assert.deepEqual(mock.deletes, [original, replacement]);
+  assert.equal((await Giving.findById(record.id))?.image, "");
 });
-test("Event cover and category image replacement retain originals", async()=>{
+test("Event cover and category image replacement clean originals", async()=>{
+ mock.deletes.length=0;
  const category=await GivingCategory.create({name:"Image category",slug:"image-category",image:"https://images.example.test/categories/00000000-0000-4000-8000-000000000031.webp",status:"active",displayOrder:1});
  const categoryResult=await request(app).put(`/api/v1/admin/giving-categories/${category.id}`).set(bearer(adminToken)).send({name:category.name,slug:category.slug,description:"",image:"https://images.example.test/categories/00000000-0000-4000-8000-000000000032.webp",status:"active",displayOrder:1});
  assert.equal(categoryResult.status,200);assert.equal(await GivingCategory.findById(category.id).then(row=>row?.image),categoryResult.body.data.image);
  const event=await Event.create({title:"Image event",slug:"image-event",shortDescription:"",description:"",startsAt:new Date(),location:"Haveli",image:"https://images.example.test/events/00000000-0000-4000-8000-000000000033.webp",gallery:[],status:"draft"});
  const eventResult=await request(app).put(`/api/v1/admin/events/${event.id}`).set(bearer(adminToken)).send({title:event.title,slug:event.slug,shortDescription:"",description:"",startsAt:event.startsAt.toISOString(),location:event.location,image:"https://images.example.test/events/00000000-0000-4000-8000-000000000034.webp",gallery:[],status:"draft"});
- assert.equal(eventResult.status,200);assert.deepEqual(mock.deletes,[]);
+ assert.equal(eventResult.status,200);assert.deepEqual(mock.deletes,[category.image,event.image]);
 });
 
 test("R2 adapter keeps flat legacy keys and uses immutable nested keys for contextual uploads", async () => {
@@ -328,6 +334,7 @@ test("R2 adapter keeps flat legacy keys and uses immutable nested keys for conte
   if (!hasImageStorageConfig(storageConfig)) throw new Error("storage config invalid");
   const storage = new R2ImageStorage(storageConfig, {
     async send(command) {
+      if (!(command instanceof PutObjectCommand)) return {};
       assert.ok(command instanceof PutObjectCommand);
       commands.push(command);
       return {};
@@ -392,9 +399,74 @@ test("Giving and category references block explicit cleanup requests",async()=>{
  await GivingCategory.create({name:"Referenced category",slug:"referenced-category",image:categoryUrl,status:"active",displayOrder:1});
  for(const url of [givingUrl,categoryUrl]){const response=await request(app).delete("/api/v1/admin/uploads").set(bearer(adminToken)).send({url});assert.equal(response.status,409);assert.equal(response.body.error.code,"IMAGE_IN_USE");}
 });
-test("unreferenced uploads remain retained because cleanup ownership is not verifiable", async()=>{
+test("admin can explicitly clean an unreferenced managed upload", async()=>{
  const url="https://images.example.test/giving/00000000-0000-4000-8000-000000000088.webp";
  const before=mock.deletes.length;
  const response=await request(app).delete("/api/v1/admin/uploads").set(bearer(adminToken)).send({url});
- assert.equal(response.status,409);assert.equal(response.body.error.code,"IMAGE_RETENTION_REQUIRED");assert.equal(mock.deletes.length,before);
+ assert.equal(response.status,204);assert.equal(mock.deletes.length,before+1);assert.equal(mock.deletes.at(-1),url);
+});
+
+test("gallery cleanup preserves a shared cover until its last reference is deleted", async()=>{
+ const shared="https://images.example.test/events/00000000-0000-4000-8000-000000000101.webp";
+ const removed="https://images.example.test/events/00000000-0000-4000-8000-000000000102.webp";
+ const event=await Event.create({title:"Shared gallery",slug:"shared-gallery",startsAt:new Date(),location:"Haveli",image:shared,gallery:[{url:shared,displayOrder:0},{url:removed,displayOrder:1}]});
+ const giving=await Giving.create({title:"Shared image",slug:"shared-cover",image:shared,amountType:"fixed",fixedAmountsCents:[100],status:"active"});
+ mock.deletes.length=0;
+ const result=await request(app).put(`/api/v1/admin/events/${event.id}`).set(bearer(adminToken)).send({title:event.title,startsAt:event.startsAt.toISOString(),location:event.location,image:shared,gallery:[],status:"draft"});
+ assert.equal(result.status,200);assert.deepEqual(mock.deletes,[removed]);
+ assert.equal((await request(app).delete(`/api/v1/admin/events/${event.id}`).set(bearer(adminToken))).status,204);
+ assert.deepEqual(mock.deletes,[removed]);
+ assert.equal((await request(app).delete(`/api/v1/admin/giving/${giving.id}`).set(bearer(adminToken))).status,204);
+ assert.deepEqual(mock.deletes,[removed,shared]);
+});
+
+test("same image and failed catalog save never delete the saved image", async()=>{
+ const image="https://images.example.test/giving/00000000-0000-4000-8000-000000000103.webp";
+ const row=await Giving.create({title:"Preserved",slug:"preserved-image",image,amountType:"fixed",fixedAmountsCents:[100],status:"active"});
+ const other=await Giving.create({title:"Conflicting slug",slug:"conflicting-image",amountType:"fixed",fixedAmountsCents:[100],status:"active"});
+ const body={title:row.title,image,amountType:"fixed",fixedAmountsCents:[100],status:"active",displayOrder:0};
+ mock.deletes.length=0;
+ assert.equal((await request(app).put(`/api/v1/admin/giving/${row.id}`).set(bearer(adminToken)).send(body)).status,200);
+ assert.equal(mock.deletes.length,0);
+ const failed=await request(app).put(`/api/v1/admin/giving/${row.id}`).set(bearer(adminToken)).send({...body,slug:other.slug,image:""});
+ assert.equal(failed.status,409);assert.equal((await Giving.findById(row.id))?.image,image);
+ await ImageCleanup.updateMany({},{$set:{nextAttemptAt:new Date(0)}});
+ await new ImageCleanupService(mock).retryPending();
+ assert.equal(mock.deletes.includes(image),false);
+});
+
+test("R2 deletion failure preserves saved catalog changes and retries durably", async(t)=>{
+ const image="https://images.example.test/giving/00000000-0000-4000-8000-000000000104.webp";
+ const row=await Giving.create({title:"Retry cleanup",slug:"retry-cleanup",image,amountType:"fixed",fixedAmountsCents:[100],status:"active"});
+ const deletion=t.mock.method(mock,"deleteManagedUrl",async()=>{throw new Error("Simulated R2 outage");});
+ const response=await request(app).put(`/api/v1/admin/giving/${row.id}`).set(bearer(adminToken)).send({title:row.title,image:"",amountType:"fixed",fixedAmountsCents:[100],status:"active",displayOrder:0});
+ assert.equal(response.status,200);assert.equal((await Giving.findById(row.id))?.image,"");
+ assert.equal(await ImageCleanup.countDocuments({url:image}),1);
+ deletion.mock.restore();
+ await ImageCleanup.updateOne({url:image},{$set:{nextAttemptAt:new Date(0),leaseUntil:new Date(0)}});
+ await new ImageCleanupService(mock).retryPending();
+ assert.equal(mock.deletes.includes(image),true);assert.equal(await ImageCleanup.countDocuments({url:image}),0);
+});
+
+test("donation-protected records retain their image and never schedule deletion", async()=>{
+ const image="https://images.example.test/giving/00000000-0000-4000-8000-000000000105.webp";
+ const row=await Giving.create({title:"Protected giving",slug:"protected-cleanup",image,amountType:"fixed",fixedAmountsCents:[100],status:"active"});
+ await Donation.create({donationNumber:"CLEANUP-TEST",donorName:"Fixture",donorEmail:"fixture@example.test",type:"general",giving:row._id,designationTitle:row.title,amountCents:100,paymentMethod:"offline",source:"offline",status:"pending"});
+ const response=await request(app).delete(`/api/v1/admin/giving/${row.id}`).set(bearer(adminToken));
+ assert.equal(response.status,409);assert.equal(response.body.error.code,"HAS_DONATIONS");
+ assert.equal((await Giving.findById(row.id))?.image,image);assert.equal(mock.deletes.includes(image),false);
+ assert.equal(await ImageCleanup.countDocuments({url:image}),0);
+});
+
+test("category deletion and event deletion remove their unshared images", async()=>{
+ const category=await GivingCategory.create({name:"Unused cleanup",slug:"unused-cleanup",image:"https://images.example.test/categories/00000000-0000-4000-8000-000000000106.webp"});
+ assert.equal((await request(app).delete(`/api/v1/admin/giving-categories/${category.id}`).set(bearer(adminToken))).status,204);
+ assert.equal(mock.deletes.includes(category.image),true);
+ const image="https://images.example.test/events/00000000-0000-4000-8000-000000000107.webp";
+ const gallery="https://images.example.test/events/00000000-0000-4000-8000-000000000108.webp";
+ const event=await Event.create({title:"Delete gallery",slug:"delete-gallery",startsAt:new Date(),location:"Haveli",image,gallery:[{url:image,displayOrder:0},{url:gallery,displayOrder:1}]});
+ const before=mock.deletes.length;
+ assert.equal((await request(app).delete(`/api/v1/admin/events/${event.id}`).set(bearer(adminToken))).status,204);
+ assert.deepEqual(mock.deletes.slice(before),[image,gallery]);
+ const deleted=await Event.findById(event.id);assert.equal(deleted?.image,"");assert.equal(deleted?.gallery.length,0);
 });

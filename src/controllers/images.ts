@@ -4,9 +4,7 @@ import type { Config } from "../config/env.js";
 import type { ImageKind, ImageStorage } from "../services/image-storage.js";
 import { AppError } from "../utils/errors.js";
 import { inspectImage } from "../utils/image-signature.js";
-import { Giving } from "../models/giving.js";
-import { Event } from "../models/event.js";
-import { GivingCategory } from "../models/giving-category.js";
+import {imageIsReferenced} from "../services/image-cleanup.js";
 import { optimizeImage } from "../services/image-optimizer.js";
 
 function parseUpload(maxBytes: number): RequestHandler {
@@ -57,11 +55,10 @@ export function imageController(config: Config, storage?: ImageStorage) {
   const remove: RequestHandler = async (req, res) => {
     if (!storage) throw new Error("Image storage guard was not applied");
     const { url } = req.validated.body as { url: string };
-    const referenced = await Promise.all([Giving.exists({image:url}), Event.exists({$or:[{image:url},{"gallery.url":url}]}), GivingCategory.exists({image:url})]);
-    if (referenced.some(Boolean)) throw new AppError(409, "IMAGE_IN_USE", "Remove saved catalog references before deleting an image");
+    if (await imageIsReferenced(url)) throw new AppError(409, "IMAGE_IN_USE", "Remove saved catalog references before deleting an image");
     const deleted = await storage.deleteManagedUrl(url);
     if (!deleted)
-      throw new AppError(409, "IMAGE_RETENTION_REQUIRED", "Images are retained until ownership, references, and rollback eligibility are verified");
+      throw new AppError(409, "IMAGE_PROTECTED", "This image is protected or is not a verified catalog upload");
     res.status(204).end();
   };
   return {

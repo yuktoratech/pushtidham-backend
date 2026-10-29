@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import {
   PutObjectCommand,
   HeadObjectCommand,
+  DeleteObjectCommand,
   S3Client,
   type HeadObjectCommandOutput,
 } from "@aws-sdk/client-s3";
@@ -39,7 +40,7 @@ type StorageConfig = Config & {
   R2_PUBLIC_BASE_URL: string;
 };
 
-type ObjectClient = {send(command: PutObjectCommand | HeadObjectCommand): Promise<unknown>};
+type ObjectClient = {send(command: PutObjectCommand | HeadObjectCommand | DeleteObjectCommand): Promise<unknown>};
 
 export function hasImageStorageConfig(config: Config): config is StorageConfig {
   return Boolean(
@@ -152,10 +153,37 @@ export class R2ImageStorage implements ImageStorage {
   }
 
   async deleteManagedUrl(url: string) {
-    // No current caller can prove ownership, rollback expiry, and complete reference
-    // coverage. Retention is the safe default; cleanup requires a separately reviewed executor.
-    void url;
-    return false;
+    // Never accept an arbitrary bucket/key or delete branding/site assets.
+    if (!url.startsWith(`${this.publicBase}/`)) return false;
+    const suffix = url.slice(this.publicBase.length + 1);
+    let key: string;
+    try {key = decodeURIComponent(suffix);} catch {return false;}
+    if (encodedKey(key) !== suffix || PROTECTED_IMAGE_PREFIXES.some(prefix => key.startsWith(prefix))) return false;
+    const legacy = /^(giving|events|categories)\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(?:jpg|jpeg|png|webp)$/.exec(key);
+    const nested = /^(giving|categories)\/([a-z0-9]+(?:-[a-z0-9]+)*)\/\2-([a-f0-9]{64})\.webp$/.exec(key);
+    const event = /^(events)\/([a-z0-9]+(?:-[a-z0-9]+)*)\/(cover|gallery)\/\2-([a-f0-9]{64})\.webp$/.exec(key);
+    if (!legacy && !nested && !event) return false;
+    try {
+      const head = await this.client.send(new HeadObjectCommand({Bucket: this.config.R2_BUCKET_NAME, Key: key})) as HeadObjectCommandOutput;
+      const kind = (legacy ?? nested ?? event)![1];
+      const ownership = head.Metadata?.["ownership-class"];
+      if (ownership && !["giving", "category", "event-cover", "event-gallery", "legacy-flat"].includes(ownership)) return false;
+      if (head.Metadata?.kind && head.Metadata.kind !== kind) return false;
+      if (!head.ContentType || !["image/jpeg", "image/png", "image/webp"].includes(head.ContentType)) return false;
+      if (nested || event) {
+        const owner = (nested ?? event)![2];
+        const digest = nested ? nested[3] : event![4];
+        const expectedClass = kind === "giving" ? "giving" : kind === "categories" ? "category" : `event-${event![3]}`;
+        if (head.Metadata?.["entity-slug"] !== owner || head.Metadata?.sha256 !== digest || ownership !== expectedClass) return false;
+      }
+      await this.client.send(new DeleteObjectCommand({Bucket: this.config.R2_BUCKET_NAME, Key: key}));
+      return true;
+    } catch (error) {
+      const status = error && typeof error === "object" && "$metadata" in error
+        ? (error.$metadata as {httpStatusCode?: number})?.httpStatusCode : undefined;
+      if (status === 404) return true;
+      throw new AppError(502, "IMAGE_DELETE_FAILED", "Image cleanup could not be completed. Please retry.");
+    }
   }
 }
 

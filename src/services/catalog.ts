@@ -8,8 +8,10 @@ import type { ListQuery } from "../validators/common.js";
 import { paginate, escapeRegex } from "../utils/pagination.js";
 import { missing, AppError } from "../utils/errors.js";
 import type { ImageStorage } from "./image-storage.js";
+import {ImageCleanupService} from "./image-cleanup.js";
 export class CatalogService {
-  constructor(_images?: ImageStorage) {}
+  private readonly cleanup: ImageCleanupService;
+  constructor(images?: ImageStorage) {this.cleanup = new ImageCleanupService(images);}
 
   private async createWithSlug<T>(kind: "giving" | "event", title: string, requested: string | undefined, create: (slug: string) => Promise<T>): Promise<T> {
     if (requested) return create(requested);
@@ -60,8 +62,11 @@ export class CatalogService {
     if (!doc) missing("Giving Category");
     if (await Giving.exists({categoryId: id, status: "active", deletedAt: null}) && input.status === "inactive")
       throw new AppError(409, "CATEGORY_HAS_GIVINGS", "Deactivate or remap its Giving records first");
+    const cleanup = await this.cleanup.schedule(doc.image !== input.image ? [doc.image] : []);
     doc.set({...input, slug: input.slug ?? doc.slug});
-    return doc.save();
+    const saved = await doc.save();
+    await this.cleanup.process(cleanup);
+    return saved;
   }
   async statusGivingCategory(id: string, status: string) {
     if (status === "inactive" && await Giving.exists({categoryId: id, status: "active", deletedAt: null}))
@@ -71,8 +76,11 @@ export class CatalogService {
   }
   async removeGivingCategory(id: string) {
     if (await Giving.exists({categoryId: id})) throw new AppError(409, "CATEGORY_HAS_GIVINGS", "Category is assigned to Giving records");
-    const doc = await GivingCategory.findByIdAndDelete(id);
+    const doc = await GivingCategory.findById(id);
     if (!doc) missing("Giving Category");
+    const cleanup = await this.cleanup.schedule([doc.image]);
+    await doc.deleteOne();
+    await this.cleanup.process(cleanup);
   }
   async listGiving(
     query: ListQuery & {
@@ -173,6 +181,7 @@ export class CatalogService {
     const doc = await Giving.findOne({ _id: id, deletedAt: null });
     if (!doc) missing("Giving");
     const categoryId = await this.givingCategoryFor(input, doc);
+    const cleanup = await this.cleanup.schedule(doc.image !== input.image ? [doc.image] : []);
     doc.set({
       title: input.title,
       categoryId,
@@ -188,12 +197,14 @@ export class CatalogService {
       displayOrder: input.displayOrder,
     });
     const saved = await doc.save();
+    await this.cleanup.process(cleanup);
     return saved;
   }
   async replaceEvent(id: string, input: EventInput) {
     const doc = await Event.findOne({ _id: id, deletedAt: null });
     if (!doc) missing("Event");
-    const previousImage = doc.image;
+    const nextImages = new Set([input.image, ...(input.gallery ?? doc.gallery).map(row => row.url)]);
+    const cleanup = await this.cleanup.schedule([doc.image, ...doc.gallery.map(row => row.url)].filter(url => !nextImages.has(url)));
     doc.set({
       title: input.title,
       slug: input.slug ?? doc.slug,
@@ -207,8 +218,7 @@ export class CatalogService {
       status: input.status,
     });
     const saved = await doc.save();
-    // Retain replaced Event images for rollback; cleanup is a separate approved operation.
-    void previousImage;
+    await this.cleanup.process(cleanup);
     return saved;
   }
   async status(kind: "giving" | "event", id: string, status: string) {
@@ -237,16 +247,20 @@ export class CatalogService {
         "HAS_DONATIONS",
         "Deactivate this designation to preserve donation history",
       );
+    const original = kind === "giving" ? await Giving.findOne({_id: id, deletedAt: null}) : await Event.findOne({_id: id, deletedAt: null});
+    if (!original) missing(kind);
+    const cleanup = await this.cleanup.schedule([original.image, ...("gallery" in original ? original.gallery.map(row => row.url) : [])]);
     const doc =
       kind === "giving"
         ? await Giving.findOneAndUpdate(
             { _id: id, deletedAt: null },
-            { $set: { status: "inactive", deletedAt: new Date() } },
+            { $set: { status: "inactive", deletedAt: new Date(), image: "" } },
           )
         : await Event.findOneAndUpdate(
             { _id: id, deletedAt: null },
-            { $set: { status: "inactive", deletedAt: new Date() } },
+            { $set: { status: "inactive", deletedAt: new Date(), image: "", gallery: [] } },
           );
     if (!doc) missing(kind);
+    await this.cleanup.process(cleanup);
   }
 }

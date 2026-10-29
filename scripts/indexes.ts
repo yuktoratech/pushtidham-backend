@@ -11,10 +11,12 @@ import { WebhookEvent } from "../src/models/webhook-event.js";
 import { PaymentAdjustment } from "../src/models/payment-adjustment.js";
 import {DonationCorrection} from "../src/models/donation-correction.js";
 import {DonationReceipt} from "../src/models/donation-receipt.js";
+import {ImageCleanup} from "../src/models/image-cleanup.js";
 try {
   await connectDatabase(loadConfig().MONGODB_URI);
   for (const model of [
     User,
+    ImageCleanup,
     Session,
     Giving,
     Event,
