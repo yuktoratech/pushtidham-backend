@@ -2,7 +2,7 @@ import {before, after, test, mock} from "node:test";
 import assert from "node:assert/strict";
 import {randomBytes} from "node:crypto";
 import mongoose, {Types} from "mongoose";
-import {MongoMemoryServer} from "mongodb-memory-server";
+import {MongoMemoryReplSet} from "mongodb-memory-server";
 import request from "supertest";
 import {PDFDocument, PDFArray, PDFRawStream, decodePDFRawStream} from "pdf-lib";
 import {createApp} from "../src/app.js";
@@ -15,7 +15,7 @@ import {amountInWords} from "../src/services/receipts.js";
 const owner = new Types.ObjectId(), other = new Types.ObjectId(), admin = new Types.ObjectId();
 const config = loadConfig({NODE_ENV: "test", MONGODB_URI: "mongodb://127.0.0.1/unused", FRONTEND_URL: "http://localhost:3000", JWT_ACCESS_SECRET: randomBytes(40).toString("hex"), JWT_REFRESH_SECRET: randomBytes(40).toString("hex")});
 const app = createApp(config);
-let mongo: MongoMemoryServer;
+let mongo: MongoMemoryReplSet;
 let completedId: string;
 let purposeId: string;
 const ineligible: string[] = [];
@@ -23,7 +23,7 @@ const reference = "TEST-OWNER-RECEIPT";
 const completedAt = new Date("2026-10-01T12:00:00Z");
 
 before(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await MongoMemoryReplSet.create({replSet: {count: 1}});
   assert.match(mongo.getUri(), /^mongodb:\/\/127\.0\.0\.1:/);
   await mongoose.connect(mongo.getUri(), {dbName: "isolated_donor_receipt_fixtures"});
   mock.method(AuthService.prototype, "authenticate", async (token: string) => {

@@ -44,6 +44,7 @@ export class DonationService {
       paymentMethod: "offline" as const,
       offlinePaymentMethod: input.offlinePaymentMethod ?? "other",
       offlineRequestHash: options.requestHash,
+      receiptHistoryTracked: true,
       source: "offline" as const,
       status,
       offlineReference:
@@ -172,6 +173,7 @@ export class DonationService {
     const doc = await Donation.findOneAndUpdate(
       { _id: id, status: "pending" },
       {
+        $inc: {correctionVersion: 1},
         $set: {
           status: input.status,
           verifiedBy: actor,
@@ -200,7 +202,10 @@ export function donationFilter(query: DonationQuery, user?: Types.ObjectId) {
   if (user) filter.user = user;
   for (const key of ["type", "paymentMethod", "source", "giving", "event"] as const)
     if (query[key]) filter[key] = key === 'giving' || key === 'event' ? new Types.ObjectId(query[key]) : query[key];
-  if (query.from || query.to) filter.createdAt = {...(query.from ? {$gte: new Date(query.from)} : {}), ...(query.to ? {$lte: new Date(query.to)} : {})};
+  if (query.from || query.to) filter.$expr = {$and: [
+ ...(query.from ? [{$gte: [{$ifNull: ["$donationDate", "$createdAt"]}, new Date(query.from)]}] : []),
+ ...(query.to ? [{$lte: [{$ifNull: ["$donationDate", "$createdAt"]}, new Date(query.to)]}] : []),
+ ]};
   if (query.search) {
     const regex = {$regex: escapeRegex(query.search), $options: "i"};
     filter.$or = [{donationNumber: regex}, {donorName: regex}, {donorEmail: regex}];

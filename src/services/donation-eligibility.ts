@@ -69,7 +69,7 @@ export async function requireActiveDonationUser(user?: Types.ObjectId, session?:
 
 export function validateDonationPurpose(
   purpose: string | undefined,
-  designation: Awaited<ReturnType<typeof resolveDonationDesignation>>,
+  designation: {giving?: {slug: string} | null},
 ) {
   const normalized = purpose?.trim();
   const isOther = "giving" in designation && designation.giving?.slug === "other";

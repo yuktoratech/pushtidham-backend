@@ -42,7 +42,7 @@ export async function exportDonations(query: DonationExportQuery, res: Response)
       if (row.displayStatus === "completed") totalCompletedBase += row.baseDonationCents;
       exported++;
       const donor = "donor" in row ? row.donor : {name: "", email: ""};
-      await write([row.donationNumber, date(row.createdAt), donor.name, donor.email, row.type === "event" ? "Event" : "General", row.designationTitle, row.donationPurpose, amount(row.baseDonationCents), amount(row.grossChargedCents), row.displayStatus, row.paymentMethod, row.recordKind, row.festivalTitle, row.donationOptionTitle, row.offlinePaymentMethod].map(csv).join(",") + "\r\n");
+      await write([row.donationNumber, date(row.donationDate ?? row.createdAt), donor.name, donor.email, row.type === "event" ? "Event" : "General", row.designationTitle, row.donationPurpose, amount(row.baseDonationCents), amount(row.grossChargedCents), row.displayStatus, row.paymentMethod, row.recordKind, row.festivalTitle, row.donationOptionTitle, row.offlinePaymentMethod].map(csv).join(",") + "\r\n");
     }
     batch = [];
   };

@@ -1,4 +1,6 @@
 import {z} from "zod";
+import {OfflineDonationCorrectionService} from "../services/offline-donation-corrections.js";
+import {offlineEditBody, type OfflineEditInput} from "../validators/donation.js";
 import {OfflineDonationService} from "../services/offline-donations.js";
 import { Router } from "express";
 import { health } from "../controllers/health.js";
@@ -62,6 +64,7 @@ export function routes(
   const donations = new DonationService();
   const offline = new OfflineDonationService(donations, auth, dependencies.mail, config.FRONTEND_URL);
   const receipts = new ReceiptService();
+  const corrections = new OfflineDonationCorrectionService();
   const a = authController(auth, config, dependencies.mail);
   const admin = Router();
   const images = imageController(config, dependencies.images);
@@ -239,6 +242,18 @@ export function routes(
     const result = await offline.create(req.validated.body as import("../validators/donation.js").DonationInput, req.principal!.id, req.get("Idempotency-Key") ?? "");
     res.status(result.replayed ? 200 : 201).json({success: true, data: result});
     if (result.donor.setupRequired && result.donor.welcomeEmailStatus === "pending") offline.dispatch(result.donor.id);
+  });
+  admin.patch("/donations/:id/offline", validate({params: idParams, body: offlineEditBody}), async (req, res) => {
+    const result = await corrections.edit((req.validated.params as {id: string}).id, req.validated.body as OfflineEditInput, req.principal!.id, req.get("Idempotency-Key") ?? "");
+    res.json({success: true, data: result});
+  });
+  admin.get("/donations/:id/corrections", validate({params: idParams}), async (req, res) => {
+    res.set("Cache-Control", "no-store").json({success: true, data: await corrections.history((req.validated.params as {id: string}).id)});
+  });
+  admin.get("/donations/:id/receipts/:revision", validate({params: idParams.safeExtend({revision: z.coerce.number().int().min(1)})}), async (req, res) => {
+    const {id, revision} = req.validated.params as {id: string; revision: number};
+    const result = await receipts.archived(id, revision);
+    res.set({"Content-Type": "application/pdf", "Content-Disposition": 'attachment; filename="' + result.filename + '"', "Cache-Control": "no-store"}).send(Buffer.from(result.bytes));
   });
   admin.get("/donations/:id", validate({ params: idParams }), ad.get);
   admin.get("/donations/:id/receipt", validate({params: idParams}), async (req, res) => {

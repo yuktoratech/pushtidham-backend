@@ -1,5 +1,8 @@
 import {PDFDocument, StandardFonts, rgb} from "pdf-lib";
-import {Types} from "mongoose";
+import mongoose, {Types, type ClientSession, type InferSchemaType} from "mongoose";
+import {createHash} from "node:crypto";
+import {DonationReceipt} from "../models/donation-receipt.js";
+
 import {Donation} from "../models/donation.js";
 import {PaymentAttempt} from "../models/payment-attempt.js";
 import {PaymentAdjustment} from "../models/payment-adjustment.js";
@@ -24,20 +27,10 @@ export function amountInWords(cents: number) {
   const text = `${words(dollars)} ${dollars === 1 ? "dollar" : "dollars"} and ${String(cents % 100).padStart(2, "0")}/100`;
   return text[0]!.toUpperCase() + text.slice(1);
 }
-export class ReceiptService {
-  async create(id: string, userId?: Types.ObjectId) {
-    const row = await Donation.findOne({_id: id, ...(userId ? {user: userId} : {})}).lean();
-    if (!row) missing("Donation");
-    if (row.status !== "completed") throw new AppError(409, "RECEIPT_NOT_ELIGIBLE", "A receipt is available only for a verified completed donation");
-    const offline = row.source === "offline" && Boolean(row.verifiedAt && row.verifiedBy);
-    let online = false;
-    if (row.source === "online" && row.confirmedPaymentAttempt) {
-      const attempt = await PaymentAttempt.findOne({_id: row.confirmedPaymentAttempt, donation: row._id, status: "succeeded"}).lean();
-      online = Boolean(attempt);
-    }
-    if (!offline && !online) throw new AppError(409, "RECEIPT_NOT_ELIGIBLE", "Payment verification is required before issuing a receipt");
-    if (await PaymentAdjustment.exists({donation: row._id, status: "succeeded", type: {$in: ["refund", "ach_return", "dispute"]}}))
-      throw new AppError(409, "RECEIPT_REVIEW_REQUIRED", "This donation has an adjustment; contact the temple for an updated acknowledgment");
+
+export type ReceiptRow = InferSchemaType<typeof Donation.schema>;
+export async function renderReceipt(row: ReceiptRow, revision = 1) {
+ const offline = row.source === "offline";
     const pdf = await PDFDocument.create();
     pdf.setTitle(`Donation acknowledgment ${row.donationNumber}`);
     pdf.setAuthor("Pushti Margiya Vaishnav Samaj Inc.");
@@ -68,8 +61,9 @@ export class ReceiptService {
     draw("DONATION RECEIPT", 540, 348, 12, true, green);
     fitted(row.donationNumber, 540, 328, 215, 12, true);
     draw("Date:", 540, 309, 9, true);
-    fitted(formatDate(row.completedAt ?? row.verifiedAt ?? row.createdAt), 571, 309, 182, 9);
+    fitted(formatDate(row.donationDate ?? row.completedAt ?? row.verifiedAt ?? row.createdAt), 571, 309, 182, 9);
     draw("Completed / verified", 540, 289, 9);
+    if (revision > 1) draw(`Corrected receipt - revision ${revision} (supersedes revision ${revision - 1})`, 34, 260, 8, true);
     rule(34, 272, 724);
 
     draw("Received Dollars:", 34, 247, 11, true);
@@ -137,6 +131,59 @@ export class ReceiptService {
         y -= 7;
       }
     }
-    return {bytes: await pdf.save(), filename: `${row.donationNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`};
-  }
+    return Buffer.from(await pdf.save());
+}
+export async function saveReceiptSnapshot(row: ReceiptRow & {_id: Types.ObjectId}, revision: number, session: ClientSession) {
+ const bytes = await renderReceipt(row, revision);
+ await DonationReceipt.create([{donation: row._id, revision, ...(revision > 1 ? {previousRevision: revision - 1} : {}), bytes, sha256: createHash("sha256").update(bytes).digest("hex")}], {session});
+}
+export class ReceiptService {
+ async create(id: string, userId?: Types.ObjectId): Promise<{bytes: Buffer; filename: string}> {
+  const filter = {_id: id, ...(userId ? {user: userId} : {})};
+  const row = await Donation.findOne(filter).lean();
+  if (!row) missing("Donation");
+    if (row.status !== "completed") throw new AppError(409, "RECEIPT_NOT_ELIGIBLE", "A receipt is available only for a verified completed donation");
+    const offline = row.source === "offline" && Boolean(row.verifiedAt && row.verifiedBy);
+    let online = false;
+    if (row.source === "online" && row.confirmedPaymentAttempt) {
+      const attempt = await PaymentAttempt.findOne({_id: row.confirmedPaymentAttempt, donation: row._id, status: "succeeded"}).lean();
+      online = Boolean(attempt);
+    }
+    if (!offline && !online) throw new AppError(409, "RECEIPT_NOT_ELIGIBLE", "Payment verification is required before issuing a receipt");
+    if (await PaymentAdjustment.exists({donation: row._id, status: "succeeded", type: {$in: ["refund", "ach_return", "dispute"]}})) throw new AppError(409, "RECEIPT_REVIEW_REQUIRED", "This donation has an adjustment; contact the temple for an updated acknowledgment");
+  // Preserve existing online receipt behavior; only offline corrections use this ledger.
+  if (row.source !== "offline") return {bytes: await renderReceipt(row), filename: this.filename(row.donationNumber)};
+  const revision = await mongoose.connection.transaction(async session => {
+   const current = await Donation.findOne(filter).session(session);
+   if (!current) missing("Donation");
+   if (current.status !== "completed") throw new AppError(409, "RECEIPT_NOT_ELIGIBLE", "Only completed donations have receipts");
+   // A write fence serializes issuance with corrections and donor reassignment.
+   await Donation.updateOne({_id: current._id}, {$inc: {receiptLock: 1}}, {session, timestamps: false});
+   if (current.receiptRevision) return current.receiptRevision;
+   await saveReceiptSnapshot(current.toObject(), 1, session);
+   await Donation.updateOne({_id: current._id}, {$set: {receiptRevision: 1}}, {session, timestamps: false});
+   return 1;
+  });
+  const snapshot = await DonationReceipt.findOne({donation: id, revision}).select("+bytes");
+  if (!snapshot) throw new AppError(409, "RECEIPT_SNAPSHOT_MISSING", "The stored receipt needs administrator review");
+  // Check ownership again after the transaction; superseded donor URLs cannot bypass reassignment.
+  const latest = await Donation.findOne(filter).lean();
+  if (!latest) missing("Donation");
+  if (latest.receiptRevision !== revision) return this.create(id, userId);
+  return {bytes: this.verifiedBytes(snapshot), filename: this.filename(row.donationNumber, revision)};
+ }
+ async archived(id: string, revision: number) {
+  const row = await Donation.findById(id).lean(); if (!row) missing("Donation");
+  const snapshot = await DonationReceipt.findOne({donation: id, revision}).select("+bytes");
+  if (!snapshot) missing("Receipt revision");
+  return {bytes: this.verifiedBytes(snapshot), filename: this.filename(row.donationNumber, revision, revision !== row.receiptRevision)};
+ }
+ private verifiedBytes(snapshot: {bytes: Buffer; sha256: string}) {
+  const bytes = Buffer.from(snapshot.bytes);
+  if (createHash("sha256").update(bytes).digest("hex") !== snapshot.sha256) throw new AppError(409, "RECEIPT_INTEGRITY_ERROR", "Stored receipt integrity verification failed");
+  return bytes;
+ }
+ private filename(reference: string, revision?: number, superseded = false) {
+  return reference.replace(/[^a-zA-Z0-9_-]/g, "-") + (revision ? '-r' + revision + (superseded ? '-superseded' : revision > 1 ? '-corrected' : '') : '') + '.pdf';
+ }
 }

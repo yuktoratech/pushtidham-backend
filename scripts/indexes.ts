@@ -9,6 +9,8 @@ import { Donation } from "../src/models/donation.js";
 import { PaymentAttempt } from "../src/models/payment-attempt.js";
 import { WebhookEvent } from "../src/models/webhook-event.js";
 import { PaymentAdjustment } from "../src/models/payment-adjustment.js";
+import {DonationCorrection} from "../src/models/donation-correction.js";
+import {DonationReceipt} from "../src/models/donation-receipt.js";
 try {
   await connectDatabase(loadConfig().MONGODB_URI);
   for (const model of [
@@ -17,6 +19,8 @@ try {
     Giving,
     Event,
     Donation,
+    DonationCorrection,
+    DonationReceipt,
     PaymentAttempt,
     WebhookEvent,
     PaymentAdjustment,

@@ -34,6 +34,20 @@ export const offlineBody = z
     path: ["type"],
     message: "General requires Giving; Event requires exactly one scheduled Event or Utsav option",
   });
+export const offlineEditBody = z.object({
+ expectedVersion: z.number().int().min(0),
+ reason: z.string().trim().min(1, "A correction reason is required").max(1000),
+ donorId: id.nullable(), confirmDonorReassignment: z.boolean().default(false),
+ donorName: fields.donorName, donorEmail: fields.donorEmail,
+ donorPhone: z.string().trim().max(40).default(""),
+ type: fields.type, giving: fields.giving, event: fields.event,
+ amountCents: money, donationPurpose: z.string().trim().max(500).default(""),
+ donationDate: z.iso.datetime({offset: true}),
+ offlinePaymentMethod: z.enum(["cash", "check", "other"]).optional(),
+ offlineReference: z.string().trim().max(200).default(""),
+ adminNote: z.string().max(2000).default(""),
+}).strict().refine(references, {path: ["type"], message: "Choose exactly one matching Giving or Event"});
+export type OfflineEditInput = z.infer<typeof offlineEditBody>;
 export const donationQuery = z
   .object({
     ...paging,

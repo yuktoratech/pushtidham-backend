@@ -7,7 +7,7 @@ const emptySummary = { records:0,confirmedRecords:0,confirmedBaseCents:0,feeCont
 export class FinancialReportService {
   async summary(query: FinancialReportQuery) {
     const match: Record<string, unknown> = {};
-    if(query.from||query.to) match.createdAt={...(query.from?{$gte:new Date(query.from)}:{}),...(query.to?{$lte:new Date(query.to)}:{})};
+    if(query.from||query.to) match.$expr={$and:[...(query.from?[{$gte:[{$ifNull:["$donationDate","$createdAt"]},new Date(query.from)]}]:[]),...(query.to?[{$lte:[{$ifNull:["$donationDate","$createdAt"]},new Date(query.to)]}]:[])]};
     if(query.paymentMethod) match.paymentMethod=query.paymentMethod;
     if(query.type) match.type=query.type;
     const rows=await Donation.aggregate([
