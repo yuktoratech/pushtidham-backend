@@ -107,9 +107,17 @@ export function routes(
     a.register,
   );
   router.post("/auth/login", limiter, validate({ body: login }), a.login);
+  const refreshLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: {success: false, error: {code: "RATE_LIMITED", message: "Too many session refresh requests"}},
+  });
   router.post(
     "/auth/refresh",
     a.trusted,
+    refreshLimiter,
     validate({ body: empty }),
     a.refresh,
   );
