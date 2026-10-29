@@ -328,6 +328,7 @@ test("R2 adapter keeps flat legacy keys and uses immutable nested keys for conte
   if (!hasImageStorageConfig(storageConfig)) throw new Error("storage config invalid");
   const storage = new R2ImageStorage(storageConfig, {
     async send(command) {
+      assert.ok(command instanceof PutObjectCommand);
       commands.push(command);
       return {};
     },
@@ -355,14 +356,14 @@ test("R2 adapter keeps flat legacy keys and uses immutable nested keys for conte
   await assert.rejects(storage.upload("giving", webp(), {contentType: "image/webp", extension: "webp"}, "admin-id", {slug: "../giving"}), /safe lowercase entity slug/);
   assert.equal(commands.length, 2);
 });
-test("a repeated immutable content key fails safely without overwriting the original", async()=>{
+test("a repeated immutable content key with unverified metadata fails without overwriting the original", async()=>{
  const storageConfig=loadConfig({...env,R2_ACCOUNT_ID:"00000000000000000000000000000000",R2_REGION:"auto",R2_ACCESS_KEY_ID:"local-test-access",R2_SECRET_ACCESS_KEY:"local-test-secret",R2_BUCKET_NAME:"catalog-images",R2_PUBLIC_BASE_URL:"https://images.example.test/catalog"});
  if(!hasImageStorageConfig(storageConfig))throw new Error("storage config invalid");
  const keys=new Set<string>();let writes=0;let attempts=0;
- const storage=new R2ImageStorage(storageConfig,{async send(command){attempts++;const key=command.input.Key!;if(keys.has(key))throw new Error("PreconditionFailed");keys.add(key);writes++;return {};}});
+ const storage=new R2ImageStorage(storageConfig,{async send(command){if(!(command instanceof PutObjectCommand))return {};attempts++;const key=command.input.Key!;if(keys.has(key))throw Object.assign(new Error("PreconditionFailed"),{name:"PreconditionFailed",$metadata:{httpStatusCode:412}});keys.add(key);writes++;return {};}});
  const context={slug:"mangla-seva"};const input={contentType:"image/webp" as const,extension:"webp" as const};
  const first=await storage.upload("giving",webp(),input,"admin-id",context);
- await assert.rejects(storage.upload("giving",webp(),input,"admin-id",context),/could not be completed/);
+ await assert.rejects(storage.upload("giving",webp(),input,"admin-id",context),/existing image could not be verified/);
  assert.equal(keys.size,1);assert.equal(writes,1);assert.equal(attempts,2);assert.equal(first.key,[...keys][0]);
 });
 

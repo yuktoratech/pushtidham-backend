@@ -1,7 +1,9 @@
 import { randomUUID, createHash } from "node:crypto";
 import {
   PutObjectCommand,
+  HeadObjectCommand,
   S3Client,
+  type HeadObjectCommandOutput,
 } from "@aws-sdk/client-s3";
 import type { Config } from "../config/env.js";
 import { AppError } from "../utils/errors.js";
@@ -37,7 +39,7 @@ type StorageConfig = Config & {
   R2_PUBLIC_BASE_URL: string;
 };
 
-type ObjectClient = {send(command: PutObjectCommand): Promise<unknown>};
+type ObjectClient = {send(command: PutObjectCommand | HeadObjectCommand): Promise<unknown>};
 
 export function hasImageStorageConfig(config: Config): config is StorageConfig {
   return Boolean(
@@ -96,7 +98,7 @@ export class R2ImageStorage implements ImageStorage {
         : kind === "categories" ? "category"
           : context?.placement === "gallery" ? "event-gallery" : "event-cover";
     try {
-      await this.client.send(
+      try { await this.client.send(
         new PutObjectCommand({
           Bucket: this.config.R2_BUCKET_NAME,
           Key: key,
@@ -107,7 +109,22 @@ export class R2ImageStorage implements ImageStorage {
           ContentType: image.contentType,
           CacheControl: "public, max-age=31536000, immutable",
         }),
-      );
+      ); } catch (error) {
+        const status = error && typeof error === "object" && "$metadata" in error
+          ? (error.$metadata as {httpStatusCode?: number})?.httpStatusCode : undefined;
+        if (!slug || status !== 412) throw error;
+        // A previous upload may have succeeded before the form was saved or retried.
+        // Reuse only this exact immutable key after verifying its content and owner.
+        const existing = await this.client.send(new HeadObjectCommand({
+          Bucket: this.config.R2_BUCKET_NAME, Key: key,
+        })) as HeadObjectCommandOutput;
+        if (existing.ContentLength !== bytes.length || existing.ContentType !== image.contentType ||
+          existing.Metadata?.sha256 !== digest || existing.Metadata.kind !== kind ||
+          existing.Metadata["entity-slug"] !== slug || existing.Metadata["ownership-class"] !== ownershipClass ||
+          existing.Metadata["retention-policy"] !== "retain-by-default" ||
+          existing.Metadata.placement !== context?.placement)
+          throw new AppError(409, "IMAGE_CONTENT_CONFLICT", "The existing image could not be verified. Please contact an administrator.");
+      }
     } catch (error) {
       const providerCode = error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name)
         ? error.name
@@ -119,6 +136,7 @@ export class R2ImageStorage implements ImageStorage {
         ? metadata.httpStatusCode
         : undefined;
       log("error", "r2_image_upload_failed", {providerCode, ...(providerStatus ? {providerStatus} : {})});
+      if (error instanceof AppError) throw error;
       throw new AppError(
         502,
         "IMAGE_UPLOAD_FAILED",
